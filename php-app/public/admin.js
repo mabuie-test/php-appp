@@ -231,11 +231,14 @@ async function approveInvoice(invoiceId, number, email) {
 
 async function rejectInvoice(invoiceId, orderId) {
   if (!invoiceId) return;
-  const ok = await confirmAction('Deseja marcar o pagamento como rejeitado/pendente?');
+  const ok = await confirmAction('Deseja rejeitar este comprovativo?');
   if (!ok) return;
+  const reason = prompt('Motivo da rejeição (obrigatório):', 'Comprovativo ilegível ou inválido');
+  if (!reason || !reason.trim()) return toast('Motivo obrigatório');
   const form = new FormData();
   form.set('invoice_id', invoiceId);
   form.set('order_id', orderId);
+  form.set('reason', reason.trim());
   const res = await fetch(`${apiBase}/admin/invoices/reject`, {
     method: 'POST',
     headers: { Authorization: `Bearer ${authToken}` },
@@ -255,15 +258,23 @@ async function uploadFinal(orderId, input) {
   const form = new FormData();
   form.set('order_id', orderId);
   form.append('final', input.files[0]);
-  const res = await fetch(`${apiBase}/admin/orders/final-upload`, {
-    method: 'POST',
-    headers: { Authorization: `Bearer ${authToken}` },
-    body: form,
-  });
-  const data = await res.json();
-  if (!res.ok) return toast(data.message || 'Erro ao enviar documento');
-  toast('Documento final submetido.');
-  await loadOrders();
+  const btn = document.querySelector(`button[data-action=\"final\"][data-order=\"${orderId}\"]`);
+  const progress = window.UploadUtils?.ensureProgressUI(input.closest('.upload-zone') || input.parentElement);
+  try {
+    if (btn) btn.disabled = true;
+    const result = await window.UploadUtils.uploadWithProgress(`${apiBase}/admin/orders/final-upload`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${authToken}` },
+      body: form,
+      onProgress: (pct) => window.UploadUtils.setProgress(progress, pct, 'A enviar entrega final...'),
+    });
+    if (!result.ok) return toast(result.data.message || 'Erro ao enviar documento');
+    toast('Documento final submetido.');
+    await loadOrders();
+  } finally {
+    if (btn) btn.disabled = false;
+    if (progress) window.UploadUtils.hideProgress(progress);
+  }
 }
 
 async function loadUsers() {
@@ -290,15 +301,30 @@ async function loadUsers() {
       </div>
       <div class="stacked-actions">
         <button class="ghost" data-action="toggle">${user.active ? 'Desativar' : 'Ativar'}</button>
-        ${canDeleteUsers && !isAdmin ? '<button class="ghost" data-action="delete">Eliminar</button>' : ''}
+        ${!isAdmin ? '<button class="ghost" data-action="anon">Anonimizar</button>' : ''}${canDeleteUsers && !isAdmin ? '<button class="ghost" data-action="delete">Eliminar</button>' : ''}
       </div>
     `;
 
     row.querySelector('[data-action="toggle"]').onclick = () => toggleUser(user.id, !user.active);
+    const anonBtn = row.querySelector('[data-action="anon"]');
+    if (anonBtn) anonBtn.onclick = () => anonymizeUser(user.id, user.email);
     const delBtn = row.querySelector('[data-action="delete"]');
     if (delBtn) delBtn.onclick = () => deleteUser(user.id, user.email);
     list.appendChild(row);
   });
+}
+
+
+async function anonymizeUser(userId, email) {
+  const ok = await confirmAction(`Anonimizar utilizador ${email}?`);
+  if (!ok) return;
+  const form = new FormData();
+  form.set('user_id', userId);
+  const res = await fetch(`${apiBase}/admin/users/anonymize`, { method: 'POST', headers: { Authorization: `Bearer ${authToken}` }, body: form });
+  const data = await res.json();
+  if (!res.ok) return toast(data.message || 'Erro ao anonimizar utilizador');
+  toast('Utilizador anonimizado');
+  loadUsers();
 }
 
 async function deleteUser(userId, email) {
@@ -588,17 +614,29 @@ async function sendAdminChat() {
   const msgInput = document.getElementById('chat-message');
   const fileInput = document.getElementById('chat-file');
   const orderInput = document.getElementById('chat-order');
+  const sendBtn = document.getElementById('chat-send');
   const form = new FormData();
   form.set('message', msgInput?.value || '');
   if (orderInput?.value) form.set('order_id', orderInput.value);
   if (fileInput?.files?.length) form.append('attachment', fileInput.files[0]);
-  const res = await fetch(`${apiBase}/admin/chat`, { method: 'POST', headers: { Authorization: `Bearer ${authToken}` }, body: form });
-  const data = await res.json();
-  if (!res.ok) return toast(data.message || 'Erro ao enviar nota');
-  toast('Nota registada');
-  if (msgInput) msgInput.value = '';
-  if (fileInput) fileInput.value = '';
-  loadAdminChat();
+  const progress = window.UploadUtils?.ensureProgressUI(document.getElementById('chat-card') || document.body);
+  try {
+    if (sendBtn) sendBtn.disabled = true;
+    const result = await window.UploadUtils.uploadWithProgress(`${apiBase}/admin/chat`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${authToken}` },
+      body: form,
+      onProgress: (pct) => window.UploadUtils.setProgress(progress, pct, 'A enviar anexo no chat...'),
+    });
+    if (!result.ok) return toast(result.data.message || 'Erro ao enviar nota');
+    toast('Nota registada');
+    if (msgInput) msgInput.value = '';
+    if (fileInput) fileInput.value = '';
+    loadAdminChat();
+  } finally {
+    if (sendBtn) sendBtn.disabled = false;
+    if (progress) window.UploadUtils.hideProgress(progress);
+  }
 }
 
 const chatSend = document.getElementById('chat-send');

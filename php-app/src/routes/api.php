@@ -138,6 +138,11 @@ if ($uri === '/api/admin/users/delete' && $method === 'POST') {
     AdminController::deleteUser();
     return;
 }
+
+if ($uri === '/api/admin/users/anonymize' && $method === 'POST') {
+    AdminController::anonymizeUser();
+    return;
+}
 if ($uri === '/api/admin/feedback' && $method === 'GET') {
     AdminController::feedback();
     return;
@@ -158,8 +163,26 @@ if ($uri === '/api/admin/metrics' && $method === 'GET') {
     AdminController::metrics();
     return;
 }
+
+if ($uri === '/api/admin/growth-dashboard' && $method === 'GET') {
+    AdminController::growthDashboard();
+    return;
+}
 if ($uri === '/api/admin/audits' && $method === 'GET') {
     AdminController::audits();
+    return;
+}
+
+if ($uri === '/api/admin/notifications-center' && $method === 'GET') {
+    AdminController::notificationsCenter();
+    return;
+}
+if ($uri === '/api/admin/affiliates/conversion.csv' && $method === 'GET') {
+    AdminController::affiliateConversionCsv();
+    return;
+}
+if ($uri === '/api/admin/sla' && $method === 'GET') {
+    AdminController::slaPanel();
     return;
 }
 
@@ -239,6 +262,32 @@ if ($uri === '/api/tools/track' && $method === 'POST') {
 // ROTAS DE MARKETING
 if ($uri === '/api/marketing/lead' && $method === 'POST') {
     MarketingController::captureLead();
+    return;
+}
+
+
+if ($uri === '/api/marketing/landing-config' && $method === 'GET') {
+    MarketingController::landingConfig();
+    return;
+}
+if ($uri === '/api/marketing/offers' && $method === 'GET') {
+    MarketingController::offersEngine();
+    return;
+}
+if ($uri === '/api/marketing/ab/assign' && $method === 'GET') {
+    MarketingController::abAssign();
+    return;
+}
+if ($uri === '/api/marketing/attribution' && $method === 'POST') {
+    MarketingController::trackAttribution();
+    return;
+}
+if ($uri === '/api/marketing/funnel' && $method === 'GET') {
+    MarketingController::conversionFunnel();
+    return;
+}
+if ($uri === '/api/affiliates/smart-link' && $method === 'POST') {
+    MarketingController::buildAffiliateSmartLink();
     return;
 }
 

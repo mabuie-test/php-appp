@@ -90,4 +90,39 @@ class User
         $stmt = Database::pdo()->prepare('UPDATE users SET active = :active WHERE id = :id');
         $stmt->execute([':active' => $active ? 1 : 0, ':id' => $id]);
     }
+
+
+    public static function dependencySummary(int $id): array
+    {
+        $pdo = Database::pdo();
+        $tables = [
+            'orders' => 'SELECT COUNT(*) FROM orders WHERE user_id = :id',
+            'invoices' => 'SELECT COUNT(*) FROM invoices WHERE user_id = :id',
+            'service_requests' => 'SELECT COUNT(*) FROM service_requests WHERE user_id = :id',
+            'feedback' => 'SELECT COUNT(*) FROM feedback WHERE user_id = :id',
+            'affiliate_payouts' => 'SELECT COUNT(*) FROM affiliate_payouts WHERE user_id = :id',
+        ];
+        $out = [];
+        foreach ($tables as $name => $sql) {
+            try {
+                $stmt = $pdo->prepare($sql);
+                $stmt->execute([':id' => $id]);
+                $out[$name] = (int) $stmt->fetchColumn();
+            } catch (\Throwable $e) {
+                $out[$name] = 0;
+            }
+        }
+        return $out;
+    }
+
+    public static function anonymize(int $id): void
+    {
+        $anonEmail = sprintf('anon+%d@redacted.local', $id);
+        $stmt = Database::pdo()->prepare('UPDATE users SET name = :name, email = :email, referred_by = NULL, referral_code = CONCAT("ANON", id), active = 0 WHERE id = :id');
+        $stmt->execute([
+            ':name' => 'Utilizador anonimizado #' . $id,
+            ':email' => $anonEmail,
+            ':id' => $id,
+        ]);
+    }
 }

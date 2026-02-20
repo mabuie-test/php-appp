@@ -115,16 +115,22 @@ class AdminController
     {
         $admin = self::requireAdmin();
         $invoiceId = (int) ($_POST['invoice_id'] ?? 0);
-        Invoice::updateEstado($invoiceId, 'PENDENTE');
+        $reason = trim((string) ($_POST['reason'] ?? ''));
+        if ($reason === '') {
+            Response::json(['message' => 'Motivo da rejeição é obrigatório'], 422);
+            return;
+        }
+
+        Invoice::updateEstado($invoiceId, 'REJEITADA');
         if (!empty($_POST['order_id'])) {
             Order::updateEstado((int) $_POST['order_id'], 'PENDENTE_PAGAMENTO');
         }
         $order = !empty($_POST['order_id']) ? Order::findWithUser((int) $_POST['order_id']) : null;
         if ($order) {
-            Mailer::send($order['user_email'], 'Pagamento rejeitado', 'O comprovativo da fatura #' . $invoiceId . ' foi rejeitado. Envie um novo ficheiro ou contacte o suporte.');
-            AuditHelper::log((int) $order['user_id'], 'invoice:rejeitada', ['invoice_id' => $invoiceId, 'order_id' => $order['id']]);
+            Mailer::send($order['user_email'], 'Pagamento rejeitado', 'O comprovativo da fatura #' . $invoiceId . ' foi rejeitado. Motivo: ' . $reason . '. Envie um novo ficheiro ou contacte o suporte.');
+            AuditHelper::log((int) $order['user_id'], 'invoice:rejeitada', ['invoice_id' => $invoiceId, 'order_id' => $order['id'], 'reason' => $reason, 'ts' => date('c')]);
         }
-        AuditHelper::log($admin['id'], 'invoice:reject', ['invoice_id' => $invoiceId]);
+        AuditHelper::log($admin['id'], 'invoice:reject', ['invoice_id' => $invoiceId, 'reason' => $reason, 'ts' => date('c')]);
         Response::json(['message' => 'Pagamento rejeitado']);
     }
 
@@ -384,6 +390,13 @@ public static function payouts(): void
             return;
         }
 
+        $deps = User::dependencySummary($targetId);
+        $hasDependencies = array_sum($deps) > 0;
+        if ($hasDependencies) {
+            Response::json(['message' => 'Utilizador com dependências. Use anonimização.', 'dependencies' => $deps], 409);
+            return;
+        }
+
         User::deleteNonAdmin($targetId);
         AuditHelper::log($admin['id'], 'user:delete', ['user_id' => $targetId, 'email' => $target['email'] ?? null]);
         Response::json(['message' => 'Utilizador eliminado']);
@@ -408,6 +421,57 @@ public static function payouts(): void
         $services = $pdo->query("SELECT categoria, COUNT(*) as total FROM service_requests GROUP BY categoria ORDER BY total DESC LIMIT 6")->fetchAll();
         $affiliates = $pdo->query("SELECT referrer_code, COUNT(*) as total, COALESCE(SUM(amount),0) as valor FROM affiliate_commissions GROUP BY referrer_code ORDER BY valor DESC LIMIT 5")->fetchAll();
         Response::json(['metrics' => $totals, 'status' => $statusBreakdown, 'trend' => $trend, 'services' => $services, 'affiliates' => $affiliates]);
+    }
+
+
+
+    public static function growthDashboard(): void
+    {
+        self::requireAdmin();
+        $pdo = Database::pdo();
+
+        $leads = 0;
+        $paidOrders = 0;
+        $revenue = 0.0;
+        $channel = [];
+
+        try {
+            $leads = (int) $pdo->query("SELECT COUNT(*) FROM audits WHERE action='marketing:lead'")->fetchColumn();
+        } catch (\Throwable $e) {}
+
+        try {
+            $paidOrders = (int) $pdo->query("SELECT COUNT(*) FROM invoices WHERE estado='PAGA'")->fetchColumn();
+            $revenue = (float) $pdo->query("SELECT COALESCE(SUM(valor_total),0) FROM invoices WHERE estado='PAGA'")->fetchColumn();
+        } catch (\Throwable $e) {}
+
+        try {
+            $stmt = $pdo->query("SELECT COALESCE(JSON_UNQUOTE(JSON_EXTRACT(meta, '$.origin.utm_source')), 'direct') as channel, COUNT(*) as total FROM audits WHERE action='marketing:attribution' GROUP BY channel ORDER BY total DESC");
+            $channel = $stmt->fetchAll(\PDO::FETCH_ASSOC);
+        } catch (\Throwable $e) {
+            $channel = [];
+        }
+
+        $estimatedAdSpend = $leads * 12.0;
+        $cac = $paidOrders > 0 ? round($estimatedAdSpend / $paidOrders, 2) : 0;
+        $roas = $estimatedAdSpend > 0 ? round($revenue / $estimatedAdSpend, 2) : 0;
+        $ltv = $paidOrders > 0 ? round(($revenue / $paidOrders) * 1.8, 2) : 0;
+        $leadToPaid = $leads > 0 ? round(($paidOrders / $leads) * 100, 2) : 0;
+
+        Response::json([
+            'kpis' => [
+                'estimated_cac' => $cac,
+                'estimated_roas' => $roas,
+                'approx_ltv' => $ltv,
+                'lead_to_paid_conversion' => $leadToPaid,
+            ],
+            'totals' => [
+                'leads' => $leads,
+                'paid_orders' => $paidOrders,
+                'revenue' => $revenue,
+                'estimated_ad_spend' => $estimatedAdSpend,
+            ],
+            'channel_conversion' => $channel,
+        ]);
     }
 
     public static function feedback(): void
@@ -571,6 +635,55 @@ public static function payouts(): void
             'sources' => $sources,
             'interests' => $interests,
         ]);
+    }
+
+    public static function anonymizeUser(): void
+    {
+        $admin = self::requireAdmin();
+        $targetId = (int) ($_POST['user_id'] ?? 0);
+        if ($targetId <= 0) {
+            Response::json(['message' => 'user_id obrigatório'], 400);
+            return;
+        }
+        User::anonymize($targetId);
+        AuditHelper::log($admin['id'], 'user:anonymize', ['user_id' => $targetId]);
+        Response::json(['message' => 'Utilizador anonimizado']);
+    }
+
+    public static function notificationsCenter(): void
+    {
+        self::requireAdmin();
+        $pdo = Database::pdo();
+        $rows = $pdo->query("SELECT id, action, created_at, meta FROM audits ORDER BY id DESC LIMIT 100")->fetchAll(\PDO::FETCH_ASSOC);
+        Response::json(['notifications' => $rows]);
+    }
+
+    public static function affiliateConversionCsv(): void
+    {
+        self::requireAdmin();
+        $pdo = Database::pdo();
+        $sql = "SELECT referrer_code, COUNT(*) AS total_orders, SUM(CASE WHEN status='APROVADA' THEN 1 ELSE 0 END) as approved_orders, COALESCE(SUM(amount),0) as commission_total FROM affiliate_commissions GROUP BY referrer_code ORDER BY commission_total DESC";
+        $rows = $pdo->query($sql)->fetchAll(\PDO::FETCH_ASSOC);
+
+        header('Content-Type: text/csv; charset=utf-8');
+        header('Content-Disposition: attachment; filename=affiliate-conversion.csv');
+        $out = fopen('php://output', 'w');
+        fputcsv($out, ['referrer_code', 'total_orders', 'approved_orders', 'commission_total']);
+        foreach ($rows as $r) fputcsv($out, [$r['referrer_code'], $r['total_orders'], $r['approved_orders'], $r['commission_total']]);
+        fclose($out);
+    }
+
+    public static function slaPanel(): void
+    {
+        self::requireAdmin();
+        $pdo = Database::pdo();
+        $metrics = [
+            'orders_pending_payment' => (int) $pdo->query("SELECT COUNT(*) FROM orders WHERE estado='PENDENTE_PAGAMENTO'")->fetchColumn(),
+            'orders_in_execution' => (int) $pdo->query("SELECT COUNT(*) FROM orders WHERE estado='EM_EXECUCAO'")->fetchColumn(),
+            'services_open' => (int) $pdo->query("SELECT COUNT(*) FROM service_requests WHERE status IN ('NOVO','EM_ANALISE')")->fetchColumn(),
+            'chat_open_sessions' => (int) $pdo->query("SELECT COUNT(*) FROM support_chat_sessions WHERE status IN ('open','assigned','waiting_client')")->fetchColumn(),
+        ];
+        Response::json(['sla' => $metrics]);
     }
 
     public static function audits(): void
