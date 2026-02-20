@@ -231,11 +231,14 @@ async function approveInvoice(invoiceId, number, email) {
 
 async function rejectInvoice(invoiceId, orderId) {
   if (!invoiceId) return;
-  const ok = await confirmAction('Deseja marcar o pagamento como rejeitado/pendente?');
+  const ok = await confirmAction('Deseja rejeitar este comprovativo?');
   if (!ok) return;
+  const reason = prompt('Motivo da rejeição (obrigatório):', 'Comprovativo ilegível ou inválido');
+  if (!reason || !reason.trim()) return toast('Motivo obrigatório');
   const form = new FormData();
   form.set('invoice_id', invoiceId);
   form.set('order_id', orderId);
+  form.set('reason', reason.trim());
   const res = await fetch(`${apiBase}/admin/invoices/reject`, {
     method: 'POST',
     headers: { Authorization: `Bearer ${authToken}` },
@@ -255,15 +258,23 @@ async function uploadFinal(orderId, input) {
   const form = new FormData();
   form.set('order_id', orderId);
   form.append('final', input.files[0]);
-  const res = await fetch(`${apiBase}/admin/orders/final-upload`, {
-    method: 'POST',
-    headers: { Authorization: `Bearer ${authToken}` },
-    body: form,
-  });
-  const data = await res.json();
-  if (!res.ok) return toast(data.message || 'Erro ao enviar documento');
-  toast('Documento final submetido.');
-  await loadOrders();
+  const btn = document.querySelector(`button[data-action=\"final\"][data-order=\"${orderId}\"]`);
+  const progress = window.UploadUtils?.ensureProgressUI(input.closest('.upload-zone') || input.parentElement);
+  try {
+    if (btn) btn.disabled = true;
+    const result = await window.UploadUtils.uploadWithProgress(`${apiBase}/admin/orders/final-upload`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${authToken}` },
+      body: form,
+      onProgress: (pct) => window.UploadUtils.setProgress(progress, pct, 'A enviar entrega final...'),
+    });
+    if (!result.ok) return toast(result.data.message || 'Erro ao enviar documento');
+    toast('Documento final submetido.');
+    await loadOrders();
+  } finally {
+    if (btn) btn.disabled = false;
+    if (progress) window.UploadUtils.hideProgress(progress);
+  }
 }
 
 async function loadUsers() {
@@ -290,15 +301,30 @@ async function loadUsers() {
       </div>
       <div class="stacked-actions">
         <button class="ghost" data-action="toggle">${user.active ? 'Desativar' : 'Ativar'}</button>
-        ${canDeleteUsers && !isAdmin ? '<button class="ghost" data-action="delete">Eliminar</button>' : ''}
+        ${!isAdmin ? '<button class="ghost" data-action="anon">Anonimizar</button>' : ''}${canDeleteUsers && !isAdmin ? '<button class="ghost" data-action="delete">Eliminar</button>' : ''}
       </div>
     `;
 
     row.querySelector('[data-action="toggle"]').onclick = () => toggleUser(user.id, !user.active);
+    const anonBtn = row.querySelector('[data-action="anon"]');
+    if (anonBtn) anonBtn.onclick = () => anonymizeUser(user.id, user.email);
     const delBtn = row.querySelector('[data-action="delete"]');
     if (delBtn) delBtn.onclick = () => deleteUser(user.id, user.email);
     list.appendChild(row);
   });
+}
+
+
+async function anonymizeUser(userId, email) {
+  const ok = await confirmAction(`Anonimizar utilizador ${email}?`);
+  if (!ok) return;
+  const form = new FormData();
+  form.set('user_id', userId);
+  const res = await fetch(`${apiBase}/admin/users/anonymize`, { method: 'POST', headers: { Authorization: `Bearer ${authToken}` }, body: form });
+  const data = await res.json();
+  if (!res.ok) return toast(data.message || 'Erro ao anonimizar utilizador');
+  toast('Utilizador anonimizado');
+  loadUsers();
 }
 
 async function deleteUser(userId, email) {
@@ -588,17 +614,29 @@ async function sendAdminChat() {
   const msgInput = document.getElementById('chat-message');
   const fileInput = document.getElementById('chat-file');
   const orderInput = document.getElementById('chat-order');
+  const sendBtn = document.getElementById('chat-send');
   const form = new FormData();
   form.set('message', msgInput?.value || '');
   if (orderInput?.value) form.set('order_id', orderInput.value);
   if (fileInput?.files?.length) form.append('attachment', fileInput.files[0]);
-  const res = await fetch(`${apiBase}/admin/chat`, { method: 'POST', headers: { Authorization: `Bearer ${authToken}` }, body: form });
-  const data = await res.json();
-  if (!res.ok) return toast(data.message || 'Erro ao enviar nota');
-  toast('Nota registada');
-  if (msgInput) msgInput.value = '';
-  if (fileInput) fileInput.value = '';
-  loadAdminChat();
+  const progress = window.UploadUtils?.ensureProgressUI(document.getElementById('chat-card') || document.body);
+  try {
+    if (sendBtn) sendBtn.disabled = true;
+    const result = await window.UploadUtils.uploadWithProgress(`${apiBase}/admin/chat`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${authToken}` },
+      body: form,
+      onProgress: (pct) => window.UploadUtils.setProgress(progress, pct, 'A enviar anexo no chat...'),
+    });
+    if (!result.ok) return toast(result.data.message || 'Erro ao enviar nota');
+    toast('Nota registada');
+    if (msgInput) msgInput.value = '';
+    if (fileInput) fileInput.value = '';
+    loadAdminChat();
+  } finally {
+    if (sendBtn) sendBtn.disabled = false;
+    if (progress) window.UploadUtils.hideProgress(progress);
+  }
 }
 
 const chatSend = document.getElementById('chat-send');
@@ -630,9 +668,11 @@ switch (adminPage) {
   case 'metrics':
     loadMetrics();
     loadAudits();
+    loadGrowthInsights();
     setInterval(() => {
       loadMetrics();
       loadAudits();
+      loadGrowthInsights();
     }, 20000);
     break;
   case 'affiliates':
@@ -649,7 +689,169 @@ switch (adminPage) {
     document.getElementById('chat-refresh')?.addEventListener('click', loadAdminChat);
     setInterval(loadAdminChat, 15000);
     break;
+  case 'promotions':
+    loadPromoRecipients();
+    loadPromoCampaignHistory();
+    document.getElementById('promo-refresh')?.addEventListener('click', () => { loadPromoRecipients(); loadPromoCampaignHistory(); });
+    document.getElementById('promo-include-admins')?.addEventListener('change', loadPromoRecipients);
+    document.getElementById('promo-form')?.addEventListener('submit', sendPromoCampaign);
+    break;
   default:
     loadMetrics();
     loadAudits();
+}
+
+async function loadGrowthInsights() {
+  const box = document.getElementById('growth-dashboard');
+  const fraudBox = document.getElementById('affiliate-fraud');
+  if (!box && !fraudBox) return;
+
+  if (box) {
+    try {
+      const res = await fetch(`${apiBase}/admin/growth-dashboard`, { headers: { Authorization: `Bearer ${authToken}` } });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.message || 'Erro no growth dashboard');
+      const k = data.kpis || {};
+      const channels = (data.channel_conversion || []).map((c) => `<li>${c.channel}: ${c.total}</li>`).join('') || '<li>Sem dados</li>';
+      box.innerHTML = `
+        <div class="list-item"><div><strong>CAC estimado</strong><p class="muted">${k.estimated_cac ?? 0}</p></div></div>
+        <div class="list-item"><div><strong>ROAS estimado</strong><p class="muted">${k.estimated_roas ?? 0}x</p></div></div>
+        <div class="list-item"><div><strong>LTV aproximado</strong><p class="muted">${k.approx_ltv ?? 0}</p></div></div>
+        <div class="list-item"><div><strong>Lead → Pago</strong><p class="muted">${k.lead_to_paid_conversion ?? 0}%</p></div></div>
+        <div class="list-item"><div><strong>Conversão por canal</strong><ul>${channels}</ul></div></div>
+      `;
+    } catch (err) {
+      box.innerHTML = `<p class="muted">${err.message}</p>`;
+    }
+  }
+
+  if (fraudBox) {
+    try {
+      const res = await fetch(`${apiBase}/admin/affiliates/fraud`, { headers: { Authorization: `Bearer ${authToken}` } });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.message || 'Erro ao carregar sinais de fraude');
+      const f = data.fraud || {};
+      const blocks = (f.auto_block_recommendations || []).map((r) => `<li>${r.code} · ${r.reason} (${r.severity})</li>`).join('') || '<li>Sem recomendações automáticas</li>';
+      fraudBox.innerHTML = `
+        <div class="list-item"><div><strong>Tentativas auto-referência</strong><p class="muted">${f.self_referral_attempts ?? 0}</p></div></div>
+        <div class="list-item"><div><strong>Recomendações de bloqueio</strong><ul>${blocks}</ul></div></div>
+      `;
+    } catch (err) {
+      fraudBox.innerHTML = `<p class="muted">${err.message}</p>`;
+    }
+  }
+}
+
+
+async function loadPromoRecipients() {
+  if (!requireAdmin()) return;
+  const includeAdmins = document.getElementById('promo-include-admins')?.checked ? '1' : '0';
+  const countEl = document.getElementById('promo-count');
+  const list = document.getElementById('promo-recipients');
+  if (!countEl || !list) return;
+
+  countEl.textContent = 'A carregar...';
+  list.innerHTML = '';
+
+  const res = await fetch(`${apiBase}/admin/marketing/recipients?include_admins=${includeAdmins}`, { headers: { Authorization: `Bearer ${authToken}` } });
+  const data = await res.json();
+  if (!res.ok) {
+    countEl.textContent = data.message || 'Erro ao carregar destinatários';
+    return;
+  }
+
+  const recipients = data.recipients || [];
+  countEl.textContent = `Total elegível: ${data.count || recipients.length}`;
+  if (!recipients.length) {
+    list.innerHTML = '<p class="muted">Sem destinatários válidos.</p>';
+    return;
+  }
+
+  recipients.slice(0, 200).forEach((u) => {
+    const row = document.createElement('div');
+    row.className = 'list-item';
+    row.innerHTML = `<div><strong>${u.name || 'Utilizador'}</strong><p class="muted">${u.email} · ${u.role}</p></div>`;
+    list.appendChild(row);
+  });
+  if (recipients.length > 200) {
+    const more = document.createElement('p');
+    more.className = 'muted';
+    more.textContent = `Mostrando 200 de ${recipients.length} destinatários.`;
+    list.appendChild(more);
+  }
+}
+
+async function sendPromoCampaign(e) {
+  e.preventDefault();
+  if (!requireAdmin()) return;
+
+  const subject = document.getElementById('promo-subject')?.value?.trim() || '';
+  const html = document.getElementById('promo-html')?.value || '';
+  const includeAdmins = document.getElementById('promo-include-admins')?.checked ? '1' : '0';
+  const maxRecipients = document.getElementById('promo-max')?.value || '500';
+  const testEmail = document.getElementById('promo-test-email')?.value?.trim() || '';
+  const resultEl = document.getElementById('promo-result');
+  const sendBtn = document.getElementById('promo-send');
+
+  if (!subject || !html.trim()) {
+    if (resultEl) resultEl.textContent = 'Assunto e mensagem são obrigatórios.';
+    return;
+  }
+
+  const ok = await confirmAction('Confirmar envio de campanha promocional em massa?');
+  if (!ok) return;
+
+  if (sendBtn) sendBtn.disabled = true;
+  if (resultEl) resultEl.textContent = 'A enviar campanha...';
+
+  try {
+    const res = await fetch(`${apiBase}/admin/marketing/campaign/send`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${authToken}` },
+      body: JSON.stringify({
+        subject,
+        html,
+        include_admins: includeAdmins,
+        max_recipients: Number(maxRecipients || 500),
+        send_test_to: testEmail,
+      }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.message || 'Falha no envio');
+    if (resultEl) {
+      resultEl.textContent = `Campanha concluída: ${data.sent}/${data.total_targets} enviados, falhas: ${data.failed}.`;
+    }
+  } catch (err) {
+    if (resultEl) resultEl.textContent = err.message;
+  } finally {
+    if (sendBtn) sendBtn.disabled = false;
+    loadPromoRecipients();
+    loadPromoCampaignHistory();
+  }
+}
+
+
+
+async function loadPromoCampaignHistory() {
+  const box = document.getElementById('promo-history');
+  if (!box) return;
+  box.innerHTML = '';
+  try {
+    const res = await fetch(`${apiBase}/admin/marketing/campaign/history?per_page=10`, { headers: { Authorization: `Bearer ${authToken}` } });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.message || 'Erro ao carregar histórico');
+    const rows = data.history || [];
+    if (!rows.length) {
+      box.innerHTML = '<p class="muted">Sem campanhas ainda.</p>';
+      return;
+    }
+    rows.forEach((r) => {
+      const item = document.createElement('div');
+      item.className = 'list-item';
+      item.innerHTML = `<div><strong>${r.action === 'marketing:campaign:test' ? 'Teste' : 'Campanha'}</strong><p class="muted">${r.subject || 'Sem assunto'} · ${r.created_at || ''}</p><p class="muted">Enviados: ${r.sent} · Falhas: ${r.failed}${r.duration_ms ? ` · ${r.duration_ms}ms` : ''}</p></div>`;
+      box.appendChild(item);
+    });
+  } catch (err) {
+    box.innerHTML = `<p class="muted">${err.message}</p>`;
+  }
 }

@@ -37,6 +37,43 @@ function captureReferralAttribution() {
 
 captureReferralAttribution();
 
+
+function captureTrafficAttribution() {
+  const params = new URLSearchParams(window.location.search);
+  const keys = ['utm_source','utm_medium','utm_campaign','utm_term','utm_content','gclid','fbclid','ref'];
+  const payload = { funnel_step: 'landing' };
+  let hasData = false;
+  keys.forEach((k) => {
+    const v = params.get(k);
+    if (v) {
+      payload[k] = v;
+      hasData = true;
+      sessionStorage.setItem(`attr_${k}`, v);
+    } else {
+      const saved = sessionStorage.getItem(`attr_${k}`);
+      if (saved) payload[k] = saved;
+    }
+  });
+
+  let visitor = localStorage.getItem('mk_visitor_id');
+  if (!visitor) {
+    visitor = `mk_${Math.random().toString(36).slice(2)}${Date.now().toString(36)}`;
+    localStorage.setItem('mk_visitor_id', visitor);
+  }
+  payload.visitor_id = visitor;
+
+  if (hasData || payload.ref) {
+    fetch(`${apiBase}/marketing/attribution`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    }).catch(() => {});
+  }
+}
+
+captureTrafficAttribution();
+
+
 function confirmAction(message) {
   return new Promise((resolve) => {
     const modal = document.getElementById('confirm-dialog');
@@ -126,21 +163,29 @@ if (orderForm) {
         Array.from(materialsField.files).forEach((file) => payload.append('materiais_uploads[]', file));
       }
     }
+    const submitBtn = orderForm.querySelector('button[type="submit"]');
+    const progress = window.UploadUtils?.ensureProgressUI(orderForm);
     try {
-      const res = await fetch(`${apiBase}/orders`, {
-        method: 'POST',
-        headers: { Authorization: `Bearer ${authToken}` },
-        body: payload,
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.message || 'Erro ao criar encomenda');
+      if (submitBtn) submitBtn.disabled = true;
+      const result = window.UploadUtils
+        ? await window.UploadUtils.uploadWithProgress(`${apiBase}/orders`, {
+            method: 'POST',
+            headers: { Authorization: `Bearer ${authToken}` },
+            body: payload,
+            onProgress: (pct) => window.UploadUtils.setProgress(progress, pct, 'A enviar materiais...'),
+          })
+        : { ok: false, data: { message: 'UploadUtils indisponível' } };
+      if (!result.ok) throw new Error(result.data.message || 'Erro ao criar encomenda');
       orderForm.reset();
       showToast('Encomenda criada e fatura emitida.');
       setTimeout(() => {
-        window.location.href = `/invoice.html?id=${data.order_id}`;
+        window.location.href = `/invoice.html?id=${result.data.order_id}`;
       }, 300);
     } catch (err) {
       showToast(err.message);
+    } finally {
+      if (submitBtn) submitBtn.disabled = false;
+      if (progress) window.UploadUtils.hideProgress(progress);
     }
   });
 }
@@ -333,15 +378,22 @@ if (serviceForm) {
     if (serviceForm.querySelector('input[name="attachment"]')?.files?.length) {
       payload.append('attachment', serviceForm.querySelector('input[name="attachment"]').files[0]);
     }
+    const submitBtn = serviceForm.querySelector('button[type="submit"]');
+    const progress = window.UploadUtils?.ensureProgressUI(serviceForm);
     try {
-      const res = await fetch(`${apiBase}/services`, { method: 'POST', headers: { Authorization: `Bearer ${authToken}` }, body: payload });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.message || 'Erro ao registar serviço');
+      if (submitBtn) submitBtn.disabled = true;
+      const result = window.UploadUtils
+        ? await window.UploadUtils.uploadWithProgress(`${apiBase}/services`, { method: 'POST', headers: { Authorization: `Bearer ${authToken}` }, body: payload, onProgress: (pct) => window.UploadUtils.setProgress(progress, pct, 'A enviar anexo...') })
+        : { ok: false, data: { message: 'UploadUtils indisponível' } };
+      if (!result.ok) throw new Error(result.data.message || 'Erro ao registar serviço');
       showToast('Pedido especializado enviado.');
       serviceForm.reset();
       loadMyServices();
     } catch (err) {
       showToast(err.message);
+    } finally {
+      if (submitBtn) submitBtn.disabled = false;
+      if (progress) window.UploadUtils.hideProgress(progress);
     }
   });
 }

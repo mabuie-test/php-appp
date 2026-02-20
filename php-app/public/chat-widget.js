@@ -239,16 +239,30 @@
     if (!state.sessionId) return;
     const input = document.getElementById('chat-input');
     const file = document.getElementById('chat-file');
+    const sendBtn = document.getElementById('chat-send');
     const txt = input?.value?.trim() || '';
     if (!txt && !(file?.files?.length)) return;
     const form = new FormData();
     form.set('session_id', state.sessionId);
     form.set('message', txt);
     if (file?.files?.length) form.append('attachment', file.files[0]);
-    await request('/message', { method: 'POST', body: form }, true);
-    if (input) input.value = '';
-    if (file) file.value = '';
-    await refresh();
+    const progress = window.UploadUtils?.ensureProgressUI(document.getElementById('chat-room') || document.body);
+    try {
+      if (sendBtn) sendBtn.disabled = true;
+      const result = await window.UploadUtils.uploadWithProgress(`${API}/message`, {
+        method: 'POST',
+        headers: state.token ? { 'X-Chat-Token': state.token } : {},
+        body: form,
+        onProgress: (pct) => window.UploadUtils.setProgress(progress, pct, 'A enviar anexo...'),
+      });
+      if (!result.ok) throw new Error(result.data.message || 'Erro ao enviar mensagem');
+      if (input) input.value = '';
+      if (file) file.value = '';
+      await refresh();
+    } finally {
+      if (sendBtn) sendBtn.disabled = false;
+      if (progress) window.UploadUtils.hideProgress(progress);
+    }
   }
 
   async function sendRating() {
