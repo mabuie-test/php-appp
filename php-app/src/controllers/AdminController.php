@@ -134,8 +134,6 @@ class AdminController
         Response::json(['message' => 'Pagamento rejeitado']);
     }
 
-// NO ARQUIVO src/controllers/AdminController.php, ADICIONE estes métodos:
-
 /**
  * Listar comissões de afiliados (para admin-affiliates.html)
  */
@@ -684,6 +682,57 @@ public static function payouts(): void
             'chat_open_sessions' => (int) $pdo->query("SELECT COUNT(*) FROM support_chat_sessions WHERE status IN ('open','assigned','waiting_client')")->fetchColumn(),
         ];
         Response::json(['sla' => $metrics]);
+    }
+
+    public static function affiliateFraudPanel(): void
+    {
+        self::requireAdmin();
+        $pdo = Database::pdo();
+
+        $signals = [
+            'self_referral_attempts' => 0,
+            'suspicious_click_bursts' => [],
+            'high_conversion_codes' => [],
+            'auto_block_recommendations' => [],
+        ];
+
+        try {
+            $signals['self_referral_attempts'] = (int) $pdo->query("SELECT COUNT(*) FROM audits WHERE action='affiliate:fraud:self_referral'")->fetchColumn();
+        } catch (\Throwable $e) {}
+
+        try {
+            $sql = "SELECT JSON_UNQUOTE(JSON_EXTRACT(meta, '$.code')) AS code, COUNT(*) AS clicks
+                    FROM audits
+                    WHERE action='affiliate:click' AND created_at >= DATE_SUB(NOW(), INTERVAL 24 HOUR)
+                    GROUP BY code
+                    HAVING clicks >= 25
+                    ORDER BY clicks DESC
+                    LIMIT 20";
+            $signals['suspicious_click_bursts'] = $pdo->query($sql)->fetchAll(\PDO::FETCH_ASSOC);
+        } catch (\Throwable $e) {}
+
+        try {
+            $sql = "SELECT referrer_code, COUNT(*) AS approved_orders, COALESCE(SUM(amount),0) AS commission
+                    FROM affiliate_commissions
+                    WHERE status='APROVADA'
+                    GROUP BY referrer_code
+                    HAVING approved_orders >= 5
+                    ORDER BY approved_orders DESC
+                    LIMIT 20";
+            $signals['high_conversion_codes'] = $pdo->query($sql)->fetchAll(\PDO::FETCH_ASSOC);
+        } catch (\Throwable $e) {}
+
+        foreach (($signals['suspicious_click_bursts'] ?? []) as $row) {
+            if ((int)($row['clicks'] ?? 0) >= 80) {
+                $signals['auto_block_recommendations'][] = [
+                    'code' => $row['code'] ?? null,
+                    'reason' => 'Clique anómalo em 24h',
+                    'severity' => 'high',
+                ];
+            }
+        }
+
+        Response::json(['fraud' => $signals]);
     }
 
     public static function audits(): void

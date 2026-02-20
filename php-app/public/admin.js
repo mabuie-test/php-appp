@@ -668,9 +668,11 @@ switch (adminPage) {
   case 'metrics':
     loadMetrics();
     loadAudits();
+    loadGrowthInsights();
     setInterval(() => {
       loadMetrics();
       loadAudits();
+      loadGrowthInsights();
     }, 20000);
     break;
   case 'affiliates':
@@ -690,4 +692,45 @@ switch (adminPage) {
   default:
     loadMetrics();
     loadAudits();
+}
+
+async function loadGrowthInsights() {
+  const box = document.getElementById('growth-dashboard');
+  const fraudBox = document.getElementById('affiliate-fraud');
+  if (!box && !fraudBox) return;
+
+  if (box) {
+    try {
+      const res = await fetch(`${apiBase}/admin/growth-dashboard`, { headers: { Authorization: `Bearer ${authToken}` } });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.message || 'Erro no growth dashboard');
+      const k = data.kpis || {};
+      const channels = (data.channel_conversion || []).map((c) => `<li>${c.channel}: ${c.total}</li>`).join('') || '<li>Sem dados</li>';
+      box.innerHTML = `
+        <div class="list-item"><div><strong>CAC estimado</strong><p class="muted">${k.estimated_cac ?? 0}</p></div></div>
+        <div class="list-item"><div><strong>ROAS estimado</strong><p class="muted">${k.estimated_roas ?? 0}x</p></div></div>
+        <div class="list-item"><div><strong>LTV aproximado</strong><p class="muted">${k.approx_ltv ?? 0}</p></div></div>
+        <div class="list-item"><div><strong>Lead → Pago</strong><p class="muted">${k.lead_to_paid_conversion ?? 0}%</p></div></div>
+        <div class="list-item"><div><strong>Conversão por canal</strong><ul>${channels}</ul></div></div>
+      `;
+    } catch (err) {
+      box.innerHTML = `<p class="muted">${err.message}</p>`;
+    }
+  }
+
+  if (fraudBox) {
+    try {
+      const res = await fetch(`${apiBase}/admin/affiliates/fraud`, { headers: { Authorization: `Bearer ${authToken}` } });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.message || 'Erro ao carregar sinais de fraude');
+      const f = data.fraud || {};
+      const blocks = (f.auto_block_recommendations || []).map((r) => `<li>${r.code} · ${r.reason} (${r.severity})</li>`).join('') || '<li>Sem recomendações automáticas</li>';
+      fraudBox.innerHTML = `
+        <div class="list-item"><div><strong>Tentativas auto-referência</strong><p class="muted">${f.self_referral_attempts ?? 0}</p></div></div>
+        <div class="list-item"><div><strong>Recomendações de bloqueio</strong><ul>${blocks}</ul></div></div>
+      `;
+    } catch (err) {
+      fraudBox.innerHTML = `<p class="muted">${err.message}</p>`;
+    }
+  }
 }

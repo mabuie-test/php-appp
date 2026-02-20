@@ -52,12 +52,18 @@
 - `POST /api/marketing/attribution`
 - `GET /api/marketing/funnel`
 - `POST /api/affiliates/smart-link`
+- `GET /api/marketing/attribution/model`
+- `POST /api/marketing/attribution/model`
+- `POST /api/marketing/recovery`
+- `POST /api/marketing/referral/post-purchase`
+- `POST /api/marketing/nps`
 
 ### Admin e BI
 - `GET /api/admin/notifications-center`
 - `GET /api/admin/affiliates/conversion.csv`
 - `GET /api/admin/sla`
 - `GET /api/admin/growth-dashboard`
+- `GET /api/admin/affiliates/fraud`
 - `POST /api/admin/users/anonymize`
 
 ### Alterados
@@ -97,3 +103,11 @@
 - **Velocidade comercial**: melhor priorização com lead scoring (hot/warm/cold).
 - **Operação/BI**: visibilidade contínua de CAC/ROAS/LTV e conversão por canal.
 - **Risco e compliance**: menor exposição de dados com anonimização e auditoria reforçada.
+
+
+## 6) Incrementos adicionais nesta iteração
+- Painel de crescimento no admin com KPIs comerciais estimados e breakdown por canal.
+- Painel anti-fraude afiliados com bursts de clique, auto-referência e recomendações de bloqueio.
+- Configuração de modelo de atribuição first-click/last-click com janela configurável.
+- Endpoint de recuperação de checkout/pedido abandonado com cadência inicial.
+- Referral pós-compra e NPS/CSAT acionável com gatilhos de upsell/depoimento/suporte.

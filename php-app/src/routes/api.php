@@ -186,6 +186,11 @@ if ($uri === '/api/admin/sla' && $method === 'GET') {
     return;
 }
 
+if ($uri === '/api/admin/affiliates/fraud' && $method === 'GET') {
+    AdminController::affiliateFraudPanel();
+    return;
+}
+
 if ($uri === '/api/admin/marketing/leads' && $method === 'GET') {
     AdminController::marketingLeads();
     return;
@@ -284,6 +289,27 @@ if ($uri === '/api/marketing/attribution' && $method === 'POST') {
 }
 if ($uri === '/api/marketing/funnel' && $method === 'GET') {
     MarketingController::conversionFunnel();
+    return;
+}
+
+if ($uri === '/api/marketing/attribution/model' && $method === 'GET') {
+    MarketingController::getAttributionModel();
+    return;
+}
+if ($uri === '/api/marketing/attribution/model' && $method === 'POST') {
+    MarketingController::saveAttributionModel();
+    return;
+}
+if ($uri === '/api/marketing/recovery' && $method === 'POST') {
+    MarketingController::checkoutRecovery();
+    return;
+}
+if ($uri === '/api/marketing/referral/post-purchase' && $method === 'POST') {
+    MarketingController::postPurchaseReferral();
+    return;
+}
+if ($uri === '/api/marketing/nps' && $method === 'POST') {
+    MarketingController::captureNps();
     return;
 }
 if ($uri === '/api/affiliates/smart-link' && $method === 'POST') {

@@ -277,4 +277,128 @@ class MarketingController
 
         Response::json(['funnel' => $steps, 'conversion' => $conv]);
     }
+
+    public static function saveAttributionModel(): void
+    {
+        $raw = file_get_contents('php://input') ?: '';
+        $data = json_decode($raw, true);
+        if (!is_array($data)) $data = $_POST;
+
+        $model = strtolower(trim((string)($data['model'] ?? 'last_click')));
+        if (!in_array($model, ['first_click', 'last_click'], true)) {
+            Response::json(['message' => 'Modelo inválido'], 422);
+            return;
+        }
+
+        $windowDays = max(1, min(90, (int)($data['window_days'] ?? 30)));
+        $cfg = self::readJsonStorage('affiliate-attribution.json', []);
+        $cfg['model'] = $model;
+        $cfg['window_days'] = $windowDays;
+        $cfg['updated_at'] = date('c');
+        self::writeJsonStorage('affiliate-attribution.json', $cfg);
+
+        AuditHelper::log(null, 'affiliate:attribution:config', $cfg);
+        Response::json(['message' => 'Configuração guardada', 'config' => $cfg]);
+    }
+
+    public static function getAttributionModel(): void
+    {
+        $cfg = self::readJsonStorage('affiliate-attribution.json', [
+            'model' => 'last_click',
+            'window_days' => 30,
+            'updated_at' => null,
+        ]);
+        Response::json(['config' => $cfg]);
+    }
+
+    public static function checkoutRecovery(): void
+    {
+        $raw = file_get_contents('php://input') ?: '';
+        $data = json_decode($raw, true);
+        if (!is_array($data)) $data = $_POST;
+
+        $email = trim((string)($data['email'] ?? ''));
+        $orderDraftId = trim((string)($data['order_draft_id'] ?? ''));
+        $stage = trim((string)($data['stage'] ?? 'abandoned'));
+
+        if ($email === '' && $orderDraftId === '') {
+            Response::json(['message' => 'email ou order_draft_id obrigatório'], 422);
+            return;
+        }
+
+        $cadence = [
+            ['t_plus_minutes' => 30, 'channel' => 'email'],
+            ['t_plus_minutes' => 180, 'channel' => 'whatsapp'],
+            ['t_plus_minutes' => 1440, 'channel' => 'internal'],
+        ];
+
+        AuditHelper::log(null, 'marketing:recovery:scheduled', [
+            'email' => $email ?: null,
+            'order_draft_id' => $orderDraftId ?: null,
+            'stage' => $stage,
+            'cadence' => $cadence,
+        ]);
+
+        Response::json(['message' => 'Recuperação agendada', 'cadence' => $cadence]);
+    }
+
+    public static function postPurchaseReferral(): void
+    {
+        $raw = file_get_contents('php://input') ?: '';
+        $data = json_decode($raw, true);
+        if (!is_array($data)) $data = $_POST;
+
+        $customerEmail = trim((string)($data['customer_email'] ?? ''));
+        $friendEmail = trim((string)($data['friend_email'] ?? ''));
+        $incentive = [
+            'customer_bonus_percent' => 10,
+            'friend_bonus_percent' => 10,
+            'expires_days' => 14,
+        ];
+
+        AuditHelper::log(null, 'marketing:referral:post_purchase', [
+            'customer_email' => $customerEmail ?: null,
+            'friend_email' => $friendEmail ?: null,
+            'incentive' => $incentive,
+        ]);
+
+        Response::json(['message' => 'Referral pós-compra registado', 'incentive' => $incentive]);
+    }
+
+    public static function captureNps(): void
+    {
+        $raw = file_get_contents('php://input') ?: '';
+        $data = json_decode($raw, true);
+        if (!is_array($data)) $data = $_POST;
+
+        $score = max(0, min(10, (int)($data['score'] ?? -1)));
+        if ($score < 0) {
+            Response::json(['message' => 'score obrigatório (0-10)'], 422);
+            return;
+        }
+
+        $email = trim((string)($data['email'] ?? ''));
+        $comment = trim((string)($data['comment'] ?? ''));
+        $segment = $score >= 9 ? 'promoter' : ($score >= 7 ? 'passive' : 'detractor');
+
+        $triggers = [];
+        if ($segment === 'promoter') {
+            $triggers[] = 'solicitar_depoimento';
+            $triggers[] = 'upsell_bundle';
+        } elseif ($segment === 'detractor') {
+            $triggers[] = 'abrir_ticket_suporte';
+            $triggers[] = 'oferta_recuperacao';
+        }
+
+        AuditHelper::log(null, 'marketing:nps', [
+            'email' => $email ?: null,
+            'score' => $score,
+            'segment' => $segment,
+            'comment' => $comment ?: null,
+            'triggers' => $triggers,
+        ]);
+
+        Response::json(['message' => 'NPS/CSAT registado', 'segment' => $segment, 'triggers' => $triggers]);
+    }
+
 }
