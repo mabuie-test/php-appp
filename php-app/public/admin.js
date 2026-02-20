@@ -689,6 +689,12 @@ switch (adminPage) {
     document.getElementById('chat-refresh')?.addEventListener('click', loadAdminChat);
     setInterval(loadAdminChat, 15000);
     break;
+  case 'promotions':
+    loadPromoRecipients();
+    document.getElementById('promo-refresh')?.addEventListener('click', loadPromoRecipients);
+    document.getElementById('promo-include-admins')?.addEventListener('change', loadPromoRecipients);
+    document.getElementById('promo-form')?.addEventListener('submit', sendPromoCampaign);
+    break;
   default:
     loadMetrics();
     loadAudits();
@@ -734,3 +740,89 @@ async function loadGrowthInsights() {
     }
   }
 }
+
+
+async function loadPromoRecipients() {
+  if (!requireAdmin()) return;
+  const includeAdmins = document.getElementById('promo-include-admins')?.checked ? '1' : '0';
+  const countEl = document.getElementById('promo-count');
+  const list = document.getElementById('promo-recipients');
+  if (!countEl || !list) return;
+
+  countEl.textContent = 'A carregar...';
+  list.innerHTML = '';
+
+  const res = await fetch(`${apiBase}/admin/marketing/recipients?include_admins=${includeAdmins}`, { headers: { Authorization: `Bearer ${authToken}` } });
+  const data = await res.json();
+  if (!res.ok) {
+    countEl.textContent = data.message || 'Erro ao carregar destinatários';
+    return;
+  }
+
+  const recipients = data.recipients || [];
+  countEl.textContent = `Total elegível: ${data.count || recipients.length}`;
+  if (!recipients.length) {
+    list.innerHTML = '<p class="muted">Sem destinatários válidos.</p>';
+    return;
+  }
+
+  recipients.slice(0, 200).forEach((u) => {
+    const row = document.createElement('div');
+    row.className = 'list-item';
+    row.innerHTML = `<div><strong>${u.name || 'Utilizador'}</strong><p class="muted">${u.email} · ${u.role}</p></div>`;
+    list.appendChild(row);
+  });
+  if (recipients.length > 200) {
+    const more = document.createElement('p');
+    more.className = 'muted';
+    more.textContent = `Mostrando 200 de ${recipients.length} destinatários.`;
+    list.appendChild(more);
+  }
+}
+
+async function sendPromoCampaign(e) {
+  e.preventDefault();
+  if (!requireAdmin()) return;
+
+  const subject = document.getElementById('promo-subject')?.value?.trim() || '';
+  const html = document.getElementById('promo-html')?.value || '';
+  const includeAdmins = document.getElementById('promo-include-admins')?.checked ? '1' : '0';
+  const maxRecipients = document.getElementById('promo-max')?.value || '500';
+  const resultEl = document.getElementById('promo-result');
+  const sendBtn = document.getElementById('promo-send');
+
+  if (!subject || !html.trim()) {
+    if (resultEl) resultEl.textContent = 'Assunto e mensagem são obrigatórios.';
+    return;
+  }
+
+  const ok = await confirmAction('Confirmar envio de campanha promocional em massa?');
+  if (!ok) return;
+
+  if (sendBtn) sendBtn.disabled = true;
+  if (resultEl) resultEl.textContent = 'A enviar campanha...';
+
+  try {
+    const res = await fetch(`${apiBase}/admin/marketing/campaign/send`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${authToken}` },
+      body: JSON.stringify({
+        subject,
+        html,
+        include_admins: includeAdmins,
+        max_recipients: Number(maxRecipients || 500),
+      }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.message || 'Falha no envio');
+    if (resultEl) {
+      resultEl.textContent = `Campanha concluída: ${data.sent}/${data.total_targets} enviados, falhas: ${data.failed}.`;
+    }
+  } catch (err) {
+    if (resultEl) resultEl.textContent = err.message;
+  } finally {
+    if (sendBtn) sendBtn.disabled = false;
+    loadPromoRecipients();
+  }
+}
+

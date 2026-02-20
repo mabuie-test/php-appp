@@ -195,6 +195,15 @@ if ($uri === '/api/admin/marketing/leads' && $method === 'GET') {
     AdminController::marketingLeads();
     return;
 }
+
+if ($uri === '/api/admin/marketing/recipients' && $method === 'GET') {
+    AdminController::marketingRecipients();
+    return;
+}
+if ($uri === '/api/admin/marketing/campaign/send' && $method === 'POST') {
+    AdminController::sendMarketingCampaign();
+    return;
+}
 if ($uri === '/api/admin/chat' && $method === 'GET') {
     AdminController::chatMessages();
     return;

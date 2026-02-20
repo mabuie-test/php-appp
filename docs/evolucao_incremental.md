@@ -65,6 +65,8 @@
 - `GET /api/admin/growth-dashboard`
 - `GET /api/admin/affiliates/fraud`
 - `POST /api/admin/users/anonymize`
+- `GET /api/admin/marketing/recipients`
+- `POST /api/admin/marketing/campaign/send`
 
 ### Alterados
 - `POST /api/admin/invoices/reject` exige `reason`, muda estado para `REJEITADA` e audita motivo.
@@ -111,3 +113,5 @@
 - Configuração de modelo de atribuição first-click/last-click com janela configurável.
 - Endpoint de recuperação de checkout/pedido abandonado com cadência inicial.
 - Referral pós-compra e NPS/CSAT acionável com gatilhos de upsell/depoimento/suporte.
+
+- Painel admin para envio automático/manual de emails promocionais em massa usando credenciais PHPMailer do .env.

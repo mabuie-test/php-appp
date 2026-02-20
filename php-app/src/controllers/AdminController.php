@@ -555,6 +555,104 @@ public static function payouts(): void
     }
 
 
+    public static function marketingRecipients(): void
+    {
+        self::requireAdmin();
+        $pdo = Database::pdo();
+        $includeAdmins = (($_GET['include_admins'] ?? '0') === '1');
+
+        $sql = "SELECT id, name, email, role, active, created_at FROM users WHERE active = 1";
+        if (!$includeAdmins) {
+            $sql .= " AND role != 'admin'";
+        }
+        $sql .= " ORDER BY id DESC";
+
+        $rows = $pdo->query($sql)->fetchAll(\PDO::FETCH_ASSOC);
+        $valid = [];
+        foreach ($rows as $r) {
+            $email = trim((string)($r['email'] ?? ''));
+            if (!filter_var($email, FILTER_VALIDATE_EMAIL)) {
+                continue;
+            }
+            if (str_ends_with(strtolower($email), '@redacted.local')) {
+                continue;
+            }
+            $valid[] = $r;
+        }
+
+        Response::json([
+            'count' => count($valid),
+            'recipients' => $valid,
+        ]);
+    }
+
+    public static function sendMarketingCampaign(): void
+    {
+        $admin = self::requireAdmin();
+
+        $raw = file_get_contents('php://input') ?: '';
+        $json = json_decode($raw, true);
+        $data = is_array($json) ? $json : $_POST;
+
+        $subject = trim((string)($data['subject'] ?? ''));
+        $html = trim((string)($data['html'] ?? ''));
+        $includeAdmins = (($data['include_admins'] ?? '0') === '1');
+        $maxRecipients = max(1, min(1000, (int)($data['max_recipients'] ?? 500)));
+
+        if ($subject === '' || $html === '') {
+            Response::json(['message' => 'subject e html são obrigatórios'], 422);
+            return;
+        }
+
+        $pdo = Database::pdo();
+        $sql = "SELECT id, email, role FROM users WHERE active = 1";
+        if (!$includeAdmins) {
+            $sql .= " AND role != 'admin'";
+        }
+        $sql .= " ORDER BY id DESC";
+        $rows = $pdo->query($sql)->fetchAll(\PDO::FETCH_ASSOC);
+
+        $targets = [];
+        foreach ($rows as $r) {
+            $email = trim((string)($r['email'] ?? ''));
+            if (!filter_var($email, FILTER_VALIDATE_EMAIL)) continue;
+            if (str_ends_with(strtolower($email), '@redacted.local')) continue;
+            $targets[] = $email;
+            if (count($targets) >= $maxRecipients) break;
+        }
+
+        if (!$targets) {
+            Response::json(['message' => 'Nenhum destinatário válido encontrado'], 404);
+            return;
+        }
+
+        $sent = 0;
+        $failed = [];
+        foreach ($targets as $email) {
+            $ok = Mailer::send($email, $subject, $html);
+            if ($ok) $sent++;
+            else $failed[] = $email;
+        }
+
+        AuditHelper::log((int)$admin['id'], 'marketing:campaign:send', [
+            'subject' => $subject,
+            'include_admins' => $includeAdmins,
+            'requested_max' => $maxRecipients,
+            'sent' => $sent,
+            'failed' => count($failed),
+            'failed_emails' => $failed,
+            'timestamp' => date('c'),
+        ]);
+
+        Response::json([
+            'message' => 'Campanha processada',
+            'sent' => $sent,
+            'failed' => count($failed),
+            'failed_emails' => $failed,
+            'total_targets' => count($targets),
+        ]);
+    }
+
     public static function marketingLeads(): void
     {
         self::requireAdmin();
