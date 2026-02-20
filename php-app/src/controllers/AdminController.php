@@ -598,9 +598,40 @@ public static function payouts(): void
         $html = trim((string)($data['html'] ?? ''));
         $includeAdmins = (($data['include_admins'] ?? '0') === '1');
         $maxRecipients = max(1, min(1000, (int)($data['max_recipients'] ?? 500)));
+        $sendTestTo = trim((string)($data['send_test_to'] ?? ''));
 
         if ($subject === '' || $html === '') {
             Response::json(['message' => 'subject e html são obrigatórios'], 422);
+            return;
+        }
+        if (mb_strlen($subject) > 200) {
+            Response::json(['message' => 'subject excede 200 caracteres'], 422);
+            return;
+        }
+
+        $campaignId = 'camp_' . date('YmdHis') . '_' . substr(bin2hex(random_bytes(4)), 0, 8);
+        $startedAt = microtime(true);
+
+        if ($sendTestTo !== '') {
+            if (!filter_var($sendTestTo, FILTER_VALIDATE_EMAIL)) {
+                Response::json(['message' => 'Email de teste inválido'], 422);
+                return;
+            }
+            $ok = Mailer::send($sendTestTo, '[TESTE] ' . $subject, $html);
+            AuditHelper::log((int)$admin['id'], 'marketing:campaign:test', [
+                'campaign_id' => $campaignId,
+                'subject' => $subject,
+                'test_email' => $sendTestTo,
+                'ok' => $ok,
+                'timestamp' => date('c'),
+            ]);
+            Response::json([
+                'message' => $ok ? 'Email de teste enviado' : 'Falha no envio de teste',
+                'campaign_id' => $campaignId,
+                'sent' => $ok ? 1 : 0,
+                'failed' => $ok ? 0 : 1,
+                'total_targets' => 1,
+            ], $ok ? 200 : 500);
             return;
         }
 
@@ -614,12 +645,13 @@ public static function payouts(): void
 
         $targets = [];
         foreach ($rows as $r) {
-            $email = trim((string)($r['email'] ?? ''));
+            $email = strtolower(trim((string)($r['email'] ?? '')));
             if (!filter_var($email, FILTER_VALIDATE_EMAIL)) continue;
-            if (str_ends_with(strtolower($email), '@redacted.local')) continue;
-            $targets[] = $email;
+            if (str_ends_with($email, '@redacted.local')) continue;
+            $targets[$email] = true;
             if (count($targets) >= $maxRecipients) break;
         }
+        $targets = array_keys($targets);
 
         if (!$targets) {
             Response::json(['message' => 'Nenhum destinatário válido encontrado'], 404);
@@ -628,28 +660,89 @@ public static function payouts(): void
 
         $sent = 0;
         $failed = [];
-        foreach ($targets as $email) {
+        foreach ($targets as $i => $email) {
             $ok = Mailer::send($email, $subject, $html);
             if ($ok) $sent++;
             else $failed[] = $email;
+
+            if ((($i + 1) % 50) === 0) {
+                usleep(120000);
+            }
         }
 
+        $durationMs = (int)round((microtime(true) - $startedAt) * 1000);
         AuditHelper::log((int)$admin['id'], 'marketing:campaign:send', [
+            'campaign_id' => $campaignId,
             'subject' => $subject,
             'include_admins' => $includeAdmins,
             'requested_max' => $maxRecipients,
             'sent' => $sent,
             'failed' => count($failed),
             'failed_emails' => $failed,
+            'duration_ms' => $durationMs,
             'timestamp' => date('c'),
         ]);
 
         Response::json([
             'message' => 'Campanha processada',
+            'campaign_id' => $campaignId,
             'sent' => $sent,
             'failed' => count($failed),
             'failed_emails' => $failed,
             'total_targets' => count($targets),
+            'duration_ms' => $durationMs,
+        ]);
+    }
+
+    public static function marketingCampaignHistory(): void
+    {
+        self::requireAdmin();
+        $page = max(1, (int)($_GET['page'] ?? 1));
+        $perPage = max(1, min(50, (int)($_GET['per_page'] ?? 10)));
+        $offset = ($page - 1) * $perPage;
+
+        $pdo = Database::pdo();
+        $countStmt = $pdo->query("SELECT COUNT(*) FROM audits WHERE action IN ('marketing:campaign:send','marketing:campaign:test')");
+        $total = (int)$countStmt->fetchColumn();
+
+        $sql = "SELECT id, created_at, action, user_id, meta
+                FROM audits
+                WHERE action IN ('marketing:campaign:send','marketing:campaign:test')
+                ORDER BY id DESC
+                LIMIT :lim OFFSET :off";
+        $stmt = $pdo->prepare($sql);
+        $stmt->bindValue(':lim', $perPage, \PDO::PARAM_INT);
+        $stmt->bindValue(':off', $offset, \PDO::PARAM_INT);
+        $stmt->execute();
+        $rows = $stmt->fetchAll(\PDO::FETCH_ASSOC);
+
+        $history = array_map(function ($r) {
+            $meta = [];
+            if (!empty($r['meta']) && is_string($r['meta'])) {
+                $d = json_decode($r['meta'], true);
+                if (is_array($d)) $meta = $d;
+            }
+            return [
+                'id' => (int)$r['id'],
+                'created_at' => $r['created_at'] ?? null,
+                'action' => $r['action'] ?? null,
+                'campaign_id' => $meta['campaign_id'] ?? null,
+                'subject' => $meta['subject'] ?? null,
+                'sent' => (int)($meta['sent'] ?? 0),
+                'failed' => (int)($meta['failed'] ?? 0),
+                'duration_ms' => (int)($meta['duration_ms'] ?? 0),
+                'test_email' => $meta['test_email'] ?? null,
+            ];
+        }, $rows);
+
+        Response::json([
+            'history' => $history,
+            'pagination' => [
+                'page' => $page,
+                'per_page' => $perPage,
+                'total' => $total,
+                'total_pages' => (int)ceil($total / $perPage),
+            ],
         ]);
     }
 

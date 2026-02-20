@@ -204,6 +204,10 @@ if ($uri === '/api/admin/marketing/campaign/send' && $method === 'POST') {
     AdminController::sendMarketingCampaign();
     return;
 }
+if ($uri === '/api/admin/marketing/campaign/history' && $method === 'GET') {
+    AdminController::marketingCampaignHistory();
+    return;
+}
 if ($uri === '/api/admin/chat' && $method === 'GET') {
     AdminController::chatMessages();
     return;

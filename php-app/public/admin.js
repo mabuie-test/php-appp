@@ -691,7 +691,8 @@ switch (adminPage) {
     break;
   case 'promotions':
     loadPromoRecipients();
-    document.getElementById('promo-refresh')?.addEventListener('click', loadPromoRecipients);
+    loadPromoCampaignHistory();
+    document.getElementById('promo-refresh')?.addEventListener('click', () => { loadPromoRecipients(); loadPromoCampaignHistory(); });
     document.getElementById('promo-include-admins')?.addEventListener('change', loadPromoRecipients);
     document.getElementById('promo-form')?.addEventListener('submit', sendPromoCampaign);
     break;
@@ -788,6 +789,7 @@ async function sendPromoCampaign(e) {
   const html = document.getElementById('promo-html')?.value || '';
   const includeAdmins = document.getElementById('promo-include-admins')?.checked ? '1' : '0';
   const maxRecipients = document.getElementById('promo-max')?.value || '500';
+  const testEmail = document.getElementById('promo-test-email')?.value?.trim() || '';
   const resultEl = document.getElementById('promo-result');
   const sendBtn = document.getElementById('promo-send');
 
@@ -811,6 +813,7 @@ async function sendPromoCampaign(e) {
         html,
         include_admins: includeAdmins,
         max_recipients: Number(maxRecipients || 500),
+        send_test_to: testEmail,
       }),
     });
     const data = await res.json();
@@ -823,6 +826,32 @@ async function sendPromoCampaign(e) {
   } finally {
     if (sendBtn) sendBtn.disabled = false;
     loadPromoRecipients();
+    loadPromoCampaignHistory();
   }
 }
 
+
+
+async function loadPromoCampaignHistory() {
+  const box = document.getElementById('promo-history');
+  if (!box) return;
+  box.innerHTML = '';
+  try {
+    const res = await fetch(`${apiBase}/admin/marketing/campaign/history?per_page=10`, { headers: { Authorization: `Bearer ${authToken}` } });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.message || 'Erro ao carregar histórico');
+    const rows = data.history || [];
+    if (!rows.length) {
+      box.innerHTML = '<p class="muted">Sem campanhas ainda.</p>';
+      return;
+    }
+    rows.forEach((r) => {
+      const item = document.createElement('div');
+      item.className = 'list-item';
+      item.innerHTML = `<div><strong>${r.action === 'marketing:campaign:test' ? 'Teste' : 'Campanha'}</strong><p class="muted">${r.subject || 'Sem assunto'} · ${r.created_at || ''}</p><p class="muted">Enviados: ${r.sent} · Falhas: ${r.failed}${r.duration_ms ? ` · ${r.duration_ms}ms` : ''}</p></div>`;
+      box.appendChild(item);
+    });
+  } catch (err) {
+    box.innerHTML = `<p class="muted">${err.message}</p>`;
+  }
+}
