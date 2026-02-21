@@ -1838,3 +1838,36 @@ canvas {
     width: min(100% - 1rem, 980px);
   }
 }
+
+.upload-progress {
+  margin-top: 10px;
+  background: rgba(15, 23, 42, 0.65);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 10px;
+  padding: 10px;
+}
+.upload-progress-hidden { display: none; }
+.upload-progress-label {
+  font-size: 12px;
+  color: var(--gray-light);
+  margin-bottom: 6px;
+}
+.upload-progress-track {
+  width: 100%;
+  height: 8px;
+  border-radius: 999px;
+  background: rgba(255,255,255,0.1);
+  overflow: hidden;
+}
+.upload-progress-bar {
+  width: 0;
+  height: 100%;
+  background: linear-gradient(90deg, var(--primary), var(--accent));
+  transition: width .2s ease;
+}
+.upload-progress-meta {
+  margin-top: 6px;
+  font-size: 12px;
+  color: var(--gray);
+  text-align: right;
+}

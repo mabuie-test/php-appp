@@ -37,6 +37,43 @@ function captureReferralAttribution() {
 
 captureReferralAttribution();
 
+
+function captureTrafficAttribution() {
+  const params = new URLSearchParams(window.location.search);
+  const keys = ['utm_source','utm_medium','utm_campaign','utm_term','utm_content','gclid','fbclid','ref'];
+  const payload = { funnel_step: 'landing' };
+  let hasData = false;
+  keys.forEach((k) => {
+    const v = params.get(k);
+    if (v) {
+      payload[k] = v;
+      hasData = true;
+      sessionStorage.setItem(`attr_${k}`, v);
+    } else {
+      const saved = sessionStorage.getItem(`attr_${k}`);
+      if (saved) payload[k] = saved;
+    }
+  });
+
+  let visitor = localStorage.getItem('mk_visitor_id');
+  if (!visitor) {
+    visitor = `mk_${Math.random().toString(36).slice(2)}${Date.now().toString(36)}`;
+    localStorage.setItem('mk_visitor_id', visitor);
+  }
+  payload.visitor_id = visitor;
+
+  if (hasData || payload.ref) {
+    fetch(`${apiBase}/marketing/attribution`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    }).catch(() => {});
+  }
+}
+
+captureTrafficAttribution();
+
+
 function confirmAction(message) {
   return new Promise((resolve) => {
     const modal = document.getElementById('confirm-dialog');
@@ -126,21 +163,29 @@ if (orderForm) {
         Array.from(materialsField.files).forEach((file) => payload.append('materiais_uploads[]', file));
       }
     }
+    const submitBtn = orderForm.querySelector('button[type="submit"]');
+    const progress = window.UploadUtils?.ensureProgressUI(orderForm);
     try {
-      const res = await fetch(`${apiBase}/orders`, {
-        method: 'POST',
-        headers: { Authorization: `Bearer ${authToken}` },
-        body: payload,
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.message || 'Erro ao criar encomenda');
+      if (submitBtn) submitBtn.disabled = true;
+      const result = window.UploadUtils
+        ? await window.UploadUtils.uploadWithProgress(`${apiBase}/orders`, {
+            method: 'POST',
+            headers: { Authorization: `Bearer ${authToken}` },
+            body: payload,
+            onProgress: (pct) => window.UploadUtils.setProgress(progress, pct, 'A enviar materiais...'),
+          })
+        : { ok: false, data: { message: 'UploadUtils indisponível' } };
+      if (!result.ok) throw new Error(result.data.message || 'Erro ao criar encomenda');
       orderForm.reset();
       showToast('Encomenda criada e fatura emitida.');
       setTimeout(() => {
-        window.location.href = `/invoice.html?id=${data.order_id}`;
+        window.location.href = `/invoice.html?id=${result.data.order_id}`;
       }, 300);
     } catch (err) {
       showToast(err.message);
+    } finally {
+      if (submitBtn) submitBtn.disabled = false;
+      if (progress) window.UploadUtils.hideProgress(progress);
     }
   });
 }
@@ -246,6 +291,9 @@ async function loadAffiliate() {
       const shareLink = data.code ? `${window.location.origin}/register.html?ref=${data.code}` : '';
       const commissions = data.commissions || [];
       const payouts = data.payouts || [];
+      const campaigns = data.campaigns || [];
+      const materials = data.materials || [];
+      const leaderboard = data.leaderboard || [];
     box.innerHTML = `
       <div class="pill">O seu código: <strong>${data.code || '—'}</strong></div>
         <div class="share-row">
@@ -260,6 +308,7 @@ async function loadAffiliate() {
       <div class="grid metrics">
         <div><p class="muted">Saldo disponível</p><h4>${data.available ?? 0} MZN</h4></div>
         <div><p class="muted">Em pedido de levantamento</p><h4>${data.outstanding ?? 0} MZN</h4></div>
+        <div><p class="muted">Próximo levantamento estimado</p><h4>${data.forecast?.next_payout_estimate ?? 0} MZN</h4></div>
       </div>
       <div class="grid metrics">
         <div><p class="muted">Total de afiliados ativos</p><h4>${data.stats?.referred_count ?? 0}</h4></div>
@@ -275,6 +324,16 @@ async function loadAffiliate() {
         <input type="text" id="payout-notes" placeholder="Ex: preferir transferência" />
       </div>
       <button class="primary" id="request-payout">Pedir levantamento</button>
+
+      <h4>Campanhas ativas</h4>
+      <div class="list">${campaigns.map((c) => `<div class="list-item"><div><strong>${c.name}</strong><p class="muted">${c.offer} · canal: ${c.channel}</p></div><span class="badge">+${c.commission_bonus_percent || 0}%</span></div>`).join('') || '<p class="muted">Sem campanhas ativas</p>'}</div>
+
+      <h4>Biblioteca de materiais</h4>
+      <div class="list">${materials.map((m) => `<div class="list-item"><div><strong>${m.title}</strong><p class="muted">${m.type || 'material'}</p></div><a class="ghost" href="${m.url}" target="_blank" rel="noopener noreferrer">Abrir</a></div>`).join('') || '<p class="muted">Sem materiais</p>'}</div>
+
+      <h4>Leaderboard de afiliados</h4>
+      <div class="list">${leaderboard.map((l) => `<div class="list-item"><div>#${l.rank} · ${l.referrer_code}</div><span class="badge">${l.total} MZN</span></div>`).join('') || '<p class="muted">Sem ranking</p>'}</div>
+
       <h4>Comissões recentes</h4>
       <div class="list">${commissions.map((c) => `<div class="list-item"><div>#${c.order_id} · ${c.amount} MZN</div><span class="badge">${c.status}</span></div>`).join('') || '<p class="muted">Sem comissões ainda</p>'}</div>
       <h4>Levantamentos</h4>
@@ -333,15 +392,22 @@ if (serviceForm) {
     if (serviceForm.querySelector('input[name="attachment"]')?.files?.length) {
       payload.append('attachment', serviceForm.querySelector('input[name="attachment"]').files[0]);
     }
+    const submitBtn = serviceForm.querySelector('button[type="submit"]');
+    const progress = window.UploadUtils?.ensureProgressUI(serviceForm);
     try {
-      const res = await fetch(`${apiBase}/services`, { method: 'POST', headers: { Authorization: `Bearer ${authToken}` }, body: payload });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.message || 'Erro ao registar serviço');
+      if (submitBtn) submitBtn.disabled = true;
+      const result = window.UploadUtils
+        ? await window.UploadUtils.uploadWithProgress(`${apiBase}/services`, { method: 'POST', headers: { Authorization: `Bearer ${authToken}` }, body: payload, onProgress: (pct) => window.UploadUtils.setProgress(progress, pct, 'A enviar anexo...') })
+        : { ok: false, data: { message: 'UploadUtils indisponível' } };
+      if (!result.ok) throw new Error(result.data.message || 'Erro ao registar serviço');
       showToast('Pedido especializado enviado.');
       serviceForm.reset();
       loadMyServices();
     } catch (err) {
       showToast(err.message);
+    } finally {
+      if (submitBtn) submitBtn.disabled = false;
+      if (progress) window.UploadUtils.hideProgress(progress);
     }
   });
 }

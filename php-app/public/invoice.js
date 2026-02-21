@@ -89,14 +89,24 @@ if (proofForm) {
     if (fileField?.files?.length) {
       form.append('comprovativo', fileField.files[0]);
     }
+    const submitBtn = proofForm.querySelector('button[type="submit"]');
+    const progress = window.UploadUtils?.ensureProgressUI(proofForm);
     try {
-      const res = await fetch(`${apiBase}/orders/proof`, { method: 'POST', headers: { Authorization: `Bearer ${authToken}` }, body: form });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.message || 'Falha ao enviar comprovativo');
+      if (submitBtn) submitBtn.disabled = true;
+      const result = await window.UploadUtils.uploadWithProgress(`${apiBase}/orders/proof`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${authToken}` },
+        body: form,
+        onProgress: (pct) => window.UploadUtils.setProgress(progress, pct, 'A enviar comprovativo...'),
+      });
+      if (!result.ok) throw new Error(result.data.message || 'Falha ao enviar comprovativo');
       alert('Comprovativo enviado com sucesso.');
       loadInvoice();
     } catch (err) {
       alert(err.message);
+    } finally {
+      if (submitBtn) submitBtn.disabled = false;
+      if (progress) window.UploadUtils.hideProgress(progress);
     }
   });
 }

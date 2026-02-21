@@ -174,25 +174,23 @@ function safeSetHTML(elm, html) { if (!elm) return; try { elm.innerHTML = html; 
       if (assoc) form.set('order_id', assoc);
       if (fInput && fInput.files && fInput.files.length) form.append('attachment', fInput.files[0]);
 
-      const res = await fetch(`${CHAT_API_BASE}/admin/chat`, {
+      const progress = window.UploadUtils?.ensureProgressUI(q('chat-card') || document.body);
+      const result = await window.UploadUtils.uploadWithProgress(`${CHAT_API_BASE}/admin/chat`, {
         method: 'POST',
         headers: token ? { Authorization: `Bearer ${token}` } : {},
         body: form,
+        onProgress: (pct) => window.UploadUtils.setProgress(progress, pct, 'A enviar anexo no chat...'),
       });
 
-      let data = {};
-      try { data = await res.json(); } catch (_) { /* ignore non-json */ }
-
-      if (!res.ok) {
-        throw new Error(data.message || 'Erro ao enviar nota');
+      if (!result.ok) {
+        throw new Error(result.data.message || 'Erro ao enviar nota');
       }
 
-      // success: clear composer and preview
       if (messageInput) { messageInput.value = ''; messageInput.focus(); }
       if (fInput) { fInput.value = ''; const filePreview = q('file-preview'); if (filePreview) safeSetHTML(filePreview, ''); }
 
-      // immediately refresh messages
       await refreshMessages();
+      if (progress) window.UploadUtils.hideProgress(progress);
     } catch (err) {
       alert(err.message || 'Falha ao enviar');
       console.error('send message error', err);

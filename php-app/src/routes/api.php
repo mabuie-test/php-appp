@@ -138,6 +138,11 @@ if ($uri === '/api/admin/users/delete' && $method === 'POST') {
     AdminController::deleteUser();
     return;
 }
+
+if ($uri === '/api/admin/users/anonymize' && $method === 'POST') {
+    AdminController::anonymizeUser();
+    return;
+}
 if ($uri === '/api/admin/feedback' && $method === 'GET') {
     AdminController::feedback();
     return;
@@ -158,13 +163,70 @@ if ($uri === '/api/admin/metrics' && $method === 'GET') {
     AdminController::metrics();
     return;
 }
+
+if ($uri === '/api/admin/growth-dashboard' && $method === 'GET') {
+    AdminController::growthDashboard();
+    return;
+}
 if ($uri === '/api/admin/audits' && $method === 'GET') {
     AdminController::audits();
     return;
 }
 
+if ($uri === '/api/admin/notifications-center' && $method === 'GET') {
+    AdminController::notificationsCenter();
+    return;
+}
+if ($uri === '/api/admin/affiliates/conversion.csv' && $method === 'GET') {
+    AdminController::affiliateConversionCsv();
+    return;
+}
+if ($uri === '/api/admin/sla' && $method === 'GET') {
+    AdminController::slaPanel();
+    return;
+}
+
+if ($uri === '/api/admin/affiliates/fraud' && $method === 'GET') {
+    AdminController::affiliateFraudPanel();
+    return;
+}
+
+if ($uri === '/api/admin/affiliates/campaigns' && $method === 'GET') {
+    AdminController::affiliateCampaigns();
+    return;
+}
+if ($uri === '/api/admin/affiliates/campaigns/save' && $method === 'POST') {
+    AdminController::saveAffiliateCampaign();
+    return;
+}
+if ($uri === '/api/admin/affiliates/materials' && $method === 'GET') {
+    AdminController::affiliateMaterials();
+    return;
+}
+if ($uri === '/api/admin/affiliates/materials/save' && $method === 'POST') {
+    AdminController::saveAffiliateMaterial();
+    return;
+}
+if ($uri === '/api/admin/affiliates/control' && $method === 'GET') {
+    AdminController::affiliateControl();
+    return;
+}
+
 if ($uri === '/api/admin/marketing/leads' && $method === 'GET') {
     AdminController::marketingLeads();
+    return;
+}
+
+if ($uri === '/api/admin/marketing/recipients' && $method === 'GET') {
+    AdminController::marketingRecipients();
+    return;
+}
+if ($uri === '/api/admin/marketing/campaign/send' && $method === 'POST') {
+    AdminController::sendMarketingCampaign();
+    return;
+}
+if ($uri === '/api/admin/marketing/campaign/history' && $method === 'GET') {
+    AdminController::marketingCampaignHistory();
     return;
 }
 if ($uri === '/api/admin/chat' && $method === 'GET') {
@@ -239,6 +301,53 @@ if ($uri === '/api/tools/track' && $method === 'POST') {
 // ROTAS DE MARKETING
 if ($uri === '/api/marketing/lead' && $method === 'POST') {
     MarketingController::captureLead();
+    return;
+}
+
+
+if ($uri === '/api/marketing/landing-config' && $method === 'GET') {
+    MarketingController::landingConfig();
+    return;
+}
+if ($uri === '/api/marketing/offers' && $method === 'GET') {
+    MarketingController::offersEngine();
+    return;
+}
+if ($uri === '/api/marketing/ab/assign' && $method === 'GET') {
+    MarketingController::abAssign();
+    return;
+}
+if ($uri === '/api/marketing/attribution' && $method === 'POST') {
+    MarketingController::trackAttribution();
+    return;
+}
+if ($uri === '/api/marketing/funnel' && $method === 'GET') {
+    MarketingController::conversionFunnel();
+    return;
+}
+
+if ($uri === '/api/marketing/attribution/model' && $method === 'GET') {
+    MarketingController::getAttributionModel();
+    return;
+}
+if ($uri === '/api/marketing/attribution/model' && $method === 'POST') {
+    MarketingController::saveAttributionModel();
+    return;
+}
+if ($uri === '/api/marketing/recovery' && $method === 'POST') {
+    MarketingController::checkoutRecovery();
+    return;
+}
+if ($uri === '/api/marketing/referral/post-purchase' && $method === 'POST') {
+    MarketingController::postPurchaseReferral();
+    return;
+}
+if ($uri === '/api/marketing/nps' && $method === 'POST') {
+    MarketingController::captureNps();
+    return;
+}
+if ($uri === '/api/affiliates/smart-link' && $method === 'POST') {
+    MarketingController::buildAffiliateSmartLink();
     return;
 }
 

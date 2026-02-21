@@ -17,6 +17,14 @@ use App\Config\Config;
 
 class OrderController
 {
+    private static function readJsonStorage(string $name, array $fallback = []): array
+    {
+        $path = dirname(__DIR__, 2) . '/storage/' . $name;
+        if (!is_file($path)) return $fallback;
+        $raw = file_get_contents($path) ?: '';
+        $decoded = json_decode($raw, true);
+        return is_array($decoded) ? $decoded : $fallback;
+    }
     public static function quote(): void
     {
         Auth::requireUser();
@@ -60,6 +68,9 @@ class OrderController
             if ($refUser && (int) $refUser['id'] !== (int) $user['id']) {
                 $refCode = $refUser['referral_code'];
             } else {
+                if ($refUser && (int) $refUser['id'] === (int) $user['id']) {
+                    AuditHelper::log($user['id'], 'affiliate:fraud:self_referral', ['input_code' => $inputRef]);
+                }
                 // inválido ou tentativa de auto-indicação -> ignorar
                 $refCode = null;
             }
@@ -240,6 +251,25 @@ class OrderController
 
         $clicks = Audit::affiliateClickStats($code);
 
+        $campaigns = self::readJsonStorage('affiliate-campaigns.json', []);
+        $materials = self::readJsonStorage('affiliate-materials.json', []);
+
+        $leaderboard = [];
+        try {
+            $stmt = $pdo->query("SELECT referrer_code, COALESCE(SUM(amount),0) as total FROM affiliate_commissions GROUP BY referrer_code ORDER BY total DESC LIMIT 10");
+            $rows = $stmt->fetchAll(\PDO::FETCH_ASSOC);
+            $rank = 1;
+            foreach ($rows as $r) {
+                $leaderboard[] = [
+                    'rank' => $rank++,
+                    'referrer_code' => $r['referrer_code'] ?? '',
+                    'total' => (float)($r['total'] ?? 0),
+                ];
+            }
+        } catch (\Throwable $e) {}
+
+        $nextPayoutForecast = round(($available ?? 0) * 0.7, 2);
+
         Response::json([
             'commissions' => $commissions,
             'totals' => $totals,
@@ -252,6 +282,13 @@ class OrderController
                 'clicks_total' => $clicks['total'] ?? 0,
                 'clicks_unique' => $clicks['unique'] ?? 0,
                 'clicks_today' => $clicks['today'] ?? 0,
+            ],
+            'campaigns' => array_values(array_filter($campaigns, fn($c) => (($c['status'] ?? 'active') === 'active'))),
+            'materials' => array_values(array_filter($materials, fn($m) => (($m['status'] ?? 'active') === 'active'))),
+            'leaderboard' => $leaderboard,
+            'forecast' => [
+                'next_payout_estimate' => $nextPayoutForecast,
+                'model' => 'heuristic_v1',
             ],
         ]);
     }
@@ -309,6 +346,24 @@ class OrderController
             'source' => $_SERVER['HTTP_REFERER'] ?? null,
             'ua' => $_SERVER['HTTP_USER_AGENT'] ?? null,
         ]);
+
+        if ($visitor !== '') {
+            try {
+                $pdo = \App\Config\Database::pdo();
+                $stmt = $pdo->prepare("SELECT COUNT(*) FROM audits WHERE action='affiliate:click' AND JSON_UNQUOTE(JSON_EXTRACT(meta, '$.code')) = :code AND JSON_UNQUOTE(JSON_EXTRACT(meta, '$.visitor')) = :visitor AND created_at >= DATE_SUB(NOW(), INTERVAL 10 MINUTE)");
+                $stmt->execute([':code' => $code, ':visitor' => $visitor]);
+                $count = (int) $stmt->fetchColumn();
+                if ($count >= 12) {
+                    AuditHelper::log(null, 'affiliate:fraud:anomaly', [
+                        'code' => $code,
+                        'visitor' => $visitor,
+                        'clicks_10m' => $count,
+                    ]);
+                }
+            } catch (\Throwable $e) {
+                error_log('Affiliate anomaly check error: ' . $e->getMessage());
+            }
+        }
 
         Response::json(['message' => 'click tracked']);
     }

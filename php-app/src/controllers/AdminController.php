@@ -18,6 +18,20 @@ use App\Config\Database;
 
 class AdminController
 {
+    private static function readJsonStorage(string $name, array $fallback = []): array
+    {
+        $path = dirname(__DIR__, 2) . '/storage/' . $name;
+        if (!is_file($path)) return $fallback;
+        $raw = file_get_contents($path) ?: '';
+        $decoded = json_decode($raw, true);
+        return is_array($decoded) ? $decoded : $fallback;
+    }
+
+    private static function writeJsonStorage(string $name, array $data): void
+    {
+        $path = dirname(__DIR__, 2) . '/storage/' . $name;
+        file_put_contents($path, json_encode($data, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE));
+    }
     private static function requireAdmin(): array
     {
         $user = Auth::requireUser();
@@ -115,20 +129,24 @@ class AdminController
     {
         $admin = self::requireAdmin();
         $invoiceId = (int) ($_POST['invoice_id'] ?? 0);
-        Invoice::updateEstado($invoiceId, 'PENDENTE');
+        $reason = trim((string) ($_POST['reason'] ?? ''));
+        if ($reason === '') {
+            Response::json(['message' => 'Motivo da rejeição é obrigatório'], 422);
+            return;
+        }
+
+        Invoice::updateEstado($invoiceId, 'REJEITADA');
         if (!empty($_POST['order_id'])) {
             Order::updateEstado((int) $_POST['order_id'], 'PENDENTE_PAGAMENTO');
         }
         $order = !empty($_POST['order_id']) ? Order::findWithUser((int) $_POST['order_id']) : null;
         if ($order) {
-            Mailer::send($order['user_email'], 'Pagamento rejeitado', 'O comprovativo da fatura #' . $invoiceId . ' foi rejeitado. Envie um novo ficheiro ou contacte o suporte.');
-            AuditHelper::log((int) $order['user_id'], 'invoice:rejeitada', ['invoice_id' => $invoiceId, 'order_id' => $order['id']]);
+            Mailer::send($order['user_email'], 'Pagamento rejeitado', 'O comprovativo da fatura #' . $invoiceId . ' foi rejeitado. Motivo: ' . $reason . '. Envie um novo ficheiro ou contacte o suporte.');
+            AuditHelper::log((int) $order['user_id'], 'invoice:rejeitada', ['invoice_id' => $invoiceId, 'order_id' => $order['id'], 'reason' => $reason, 'ts' => date('c')]);
         }
-        AuditHelper::log($admin['id'], 'invoice:reject', ['invoice_id' => $invoiceId]);
+        AuditHelper::log($admin['id'], 'invoice:reject', ['invoice_id' => $invoiceId, 'reason' => $reason, 'ts' => date('c')]);
         Response::json(['message' => 'Pagamento rejeitado']);
     }
-
-// NO ARQUIVO src/controllers/AdminController.php, ADICIONE estes métodos:
 
 /**
  * Listar comissões de afiliados (para admin-affiliates.html)
@@ -384,6 +402,13 @@ public static function payouts(): void
             return;
         }
 
+        $deps = User::dependencySummary($targetId);
+        $hasDependencies = array_sum($deps) > 0;
+        if ($hasDependencies) {
+            Response::json(['message' => 'Utilizador com dependências. Use anonimização.', 'dependencies' => $deps], 409);
+            return;
+        }
+
         User::deleteNonAdmin($targetId);
         AuditHelper::log($admin['id'], 'user:delete', ['user_id' => $targetId, 'email' => $target['email'] ?? null]);
         Response::json(['message' => 'Utilizador eliminado']);
@@ -408,6 +433,57 @@ public static function payouts(): void
         $services = $pdo->query("SELECT categoria, COUNT(*) as total FROM service_requests GROUP BY categoria ORDER BY total DESC LIMIT 6")->fetchAll();
         $affiliates = $pdo->query("SELECT referrer_code, COUNT(*) as total, COALESCE(SUM(amount),0) as valor FROM affiliate_commissions GROUP BY referrer_code ORDER BY valor DESC LIMIT 5")->fetchAll();
         Response::json(['metrics' => $totals, 'status' => $statusBreakdown, 'trend' => $trend, 'services' => $services, 'affiliates' => $affiliates]);
+    }
+
+
+
+    public static function growthDashboard(): void
+    {
+        self::requireAdmin();
+        $pdo = Database::pdo();
+
+        $leads = 0;
+        $paidOrders = 0;
+        $revenue = 0.0;
+        $channel = [];
+
+        try {
+            $leads = (int) $pdo->query("SELECT COUNT(*) FROM audits WHERE action='marketing:lead'")->fetchColumn();
+        } catch (\Throwable $e) {}
+
+        try {
+            $paidOrders = (int) $pdo->query("SELECT COUNT(*) FROM invoices WHERE estado='PAGA'")->fetchColumn();
+            $revenue = (float) $pdo->query("SELECT COALESCE(SUM(valor_total),0) FROM invoices WHERE estado='PAGA'")->fetchColumn();
+        } catch (\Throwable $e) {}
+
+        try {
+            $stmt = $pdo->query("SELECT COALESCE(JSON_UNQUOTE(JSON_EXTRACT(meta, '$.origin.utm_source')), 'direct') as channel, COUNT(*) as total FROM audits WHERE action='marketing:attribution' GROUP BY channel ORDER BY total DESC");
+            $channel = $stmt->fetchAll(\PDO::FETCH_ASSOC);
+        } catch (\Throwable $e) {
+            $channel = [];
+        }
+
+        $estimatedAdSpend = $leads * 12.0;
+        $cac = $paidOrders > 0 ? round($estimatedAdSpend / $paidOrders, 2) : 0;
+        $roas = $estimatedAdSpend > 0 ? round($revenue / $estimatedAdSpend, 2) : 0;
+        $ltv = $paidOrders > 0 ? round(($revenue / $paidOrders) * 1.8, 2) : 0;
+        $leadToPaid = $leads > 0 ? round(($paidOrders / $leads) * 100, 2) : 0;
+
+        Response::json([
+            'kpis' => [
+                'estimated_cac' => $cac,
+                'estimated_roas' => $roas,
+                'approx_ltv' => $ltv,
+                'lead_to_paid_conversion' => $leadToPaid,
+            ],
+            'totals' => [
+                'leads' => $leads,
+                'paid_orders' => $paidOrders,
+                'revenue' => $revenue,
+                'estimated_ad_spend' => $estimatedAdSpend,
+            ],
+            'channel_conversion' => $channel,
+        ]);
     }
 
     public static function feedback(): void
@@ -493,6 +569,197 @@ public static function payouts(): void
     }
 
 
+    public static function marketingRecipients(): void
+    {
+        self::requireAdmin();
+        $pdo = Database::pdo();
+        $includeAdmins = (($_GET['include_admins'] ?? '0') === '1');
+
+        $sql = "SELECT id, name, email, role, active, created_at FROM users WHERE active = 1";
+        if (!$includeAdmins) {
+            $sql .= " AND role != 'admin'";
+        }
+        $sql .= " ORDER BY id DESC";
+
+        $rows = $pdo->query($sql)->fetchAll(\PDO::FETCH_ASSOC);
+        $valid = [];
+        foreach ($rows as $r) {
+            $email = trim((string)($r['email'] ?? ''));
+            if (!filter_var($email, FILTER_VALIDATE_EMAIL)) {
+                continue;
+            }
+            if (str_ends_with(strtolower($email), '@redacted.local')) {
+                continue;
+            }
+            $valid[] = $r;
+        }
+
+        Response::json([
+            'count' => count($valid),
+            'recipients' => $valid,
+        ]);
+    }
+
+    public static function sendMarketingCampaign(): void
+    {
+        $admin = self::requireAdmin();
+
+        $raw = file_get_contents('php://input') ?: '';
+        $json = json_decode($raw, true);
+        $data = is_array($json) ? $json : $_POST;
+
+        $subject = trim((string)($data['subject'] ?? ''));
+        $html = trim((string)($data['html'] ?? ''));
+        $includeAdmins = (($data['include_admins'] ?? '0') === '1');
+        $maxRecipients = max(1, min(1000, (int)($data['max_recipients'] ?? 500)));
+        $sendTestTo = trim((string)($data['send_test_to'] ?? ''));
+
+        if ($subject === '' || $html === '') {
+            Response::json(['message' => 'subject e html são obrigatórios'], 422);
+            return;
+        }
+        if (mb_strlen($subject) > 200) {
+            Response::json(['message' => 'subject excede 200 caracteres'], 422);
+            return;
+        }
+
+        $campaignId = 'camp_' . date('YmdHis') . '_' . substr(bin2hex(random_bytes(4)), 0, 8);
+        $startedAt = microtime(true);
+
+        if ($sendTestTo !== '') {
+            if (!filter_var($sendTestTo, FILTER_VALIDATE_EMAIL)) {
+                Response::json(['message' => 'Email de teste inválido'], 422);
+                return;
+            }
+            $ok = Mailer::send($sendTestTo, '[TESTE] ' . $subject, $html);
+            AuditHelper::log((int)$admin['id'], 'marketing:campaign:test', [
+                'campaign_id' => $campaignId,
+                'subject' => $subject,
+                'test_email' => $sendTestTo,
+                'ok' => $ok,
+                'timestamp' => date('c'),
+            ]);
+            Response::json([
+                'message' => $ok ? 'Email de teste enviado' : 'Falha no envio de teste',
+                'campaign_id' => $campaignId,
+                'sent' => $ok ? 1 : 0,
+                'failed' => $ok ? 0 : 1,
+                'total_targets' => 1,
+            ], $ok ? 200 : 500);
+            return;
+        }
+
+        $pdo = Database::pdo();
+        $sql = "SELECT id, email, role FROM users WHERE active = 1";
+        if (!$includeAdmins) {
+            $sql .= " AND role != 'admin'";
+        }
+        $sql .= " ORDER BY id DESC";
+        $rows = $pdo->query($sql)->fetchAll(\PDO::FETCH_ASSOC);
+
+        $targets = [];
+        foreach ($rows as $r) {
+            $email = strtolower(trim((string)($r['email'] ?? '')));
+            if (!filter_var($email, FILTER_VALIDATE_EMAIL)) continue;
+            if (str_ends_with($email, '@redacted.local')) continue;
+            $targets[$email] = true;
+            if (count($targets) >= $maxRecipients) break;
+        }
+        $targets = array_keys($targets);
+
+        if (!$targets) {
+            Response::json(['message' => 'Nenhum destinatário válido encontrado'], 404);
+            return;
+        }
+
+        $sent = 0;
+        $failed = [];
+        foreach ($targets as $i => $email) {
+            $ok = Mailer::send($email, $subject, $html);
+            if ($ok) $sent++;
+            else $failed[] = $email;
+
+            if ((($i + 1) % 50) === 0) {
+                usleep(120000);
+            }
+        }
+
+        $durationMs = (int)round((microtime(true) - $startedAt) * 1000);
+        AuditHelper::log((int)$admin['id'], 'marketing:campaign:send', [
+            'campaign_id' => $campaignId,
+            'subject' => $subject,
+            'include_admins' => $includeAdmins,
+            'requested_max' => $maxRecipients,
+            'sent' => $sent,
+            'failed' => count($failed),
+            'failed_emails' => $failed,
+            'duration_ms' => $durationMs,
+            'timestamp' => date('c'),
+        ]);
+
+        Response::json([
+            'message' => 'Campanha processada',
+            'campaign_id' => $campaignId,
+            'sent' => $sent,
+            'failed' => count($failed),
+            'failed_emails' => $failed,
+            'total_targets' => count($targets),
+            'duration_ms' => $durationMs,
+        ]);
+    }
+
+    public static function marketingCampaignHistory(): void
+    {
+        self::requireAdmin();
+        $page = max(1, (int)($_GET['page'] ?? 1));
+        $perPage = max(1, min(50, (int)($_GET['per_page'] ?? 10)));
+        $offset = ($page - 1) * $perPage;
+
+        $pdo = Database::pdo();
+        $countStmt = $pdo->query("SELECT COUNT(*) FROM audits WHERE action IN ('marketing:campaign:send','marketing:campaign:test')");
+        $total = (int)$countStmt->fetchColumn();
+
+        $sql = "SELECT id, created_at, action, user_id, meta
+                FROM audits
+                WHERE action IN ('marketing:campaign:send','marketing:campaign:test')
+                ORDER BY id DESC
+                LIMIT :lim OFFSET :off";
+        $stmt = $pdo->prepare($sql);
+        $stmt->bindValue(':lim', $perPage, \PDO::PARAM_INT);
+        $stmt->bindValue(':off', $offset, \PDO::PARAM_INT);
+        $stmt->execute();
+        $rows = $stmt->fetchAll(\PDO::FETCH_ASSOC);
+
+        $history = array_map(function ($r) {
+            $meta = [];
+            if (!empty($r['meta']) && is_string($r['meta'])) {
+                $d = json_decode($r['meta'], true);
+                if (is_array($d)) $meta = $d;
+            }
+            return [
+                'id' => (int)$r['id'],
+                'created_at' => $r['created_at'] ?? null,
+                'action' => $r['action'] ?? null,
+                'campaign_id' => $meta['campaign_id'] ?? null,
+                'subject' => $meta['subject'] ?? null,
+                'sent' => (int)($meta['sent'] ?? 0),
+                'failed' => (int)($meta['failed'] ?? 0),
+                'duration_ms' => (int)($meta['duration_ms'] ?? 0),
+                'test_email' => $meta['test_email'] ?? null,
+            ];
+        }, $rows);
+
+        Response::json([
+            'history' => $history,
+            'pagination' => [
+                'page' => $page,
+                'per_page' => $perPage,
+                'total' => $total,
+                'total_pages' => (int)ceil($total / $perPage),
+            ],
+        ]);
+    }
+
     public static function marketingLeads(): void
     {
         self::requireAdmin();
@@ -571,6 +838,242 @@ public static function payouts(): void
             'sources' => $sources,
             'interests' => $interests,
         ]);
+    }
+
+    public static function anonymizeUser(): void
+    {
+        $admin = self::requireAdmin();
+        $targetId = (int) ($_POST['user_id'] ?? 0);
+        if ($targetId <= 0) {
+            Response::json(['message' => 'user_id obrigatório'], 400);
+            return;
+        }
+        User::anonymize($targetId);
+        AuditHelper::log($admin['id'], 'user:anonymize', ['user_id' => $targetId]);
+        Response::json(['message' => 'Utilizador anonimizado']);
+    }
+
+    public static function notificationsCenter(): void
+    {
+        self::requireAdmin();
+        $pdo = Database::pdo();
+        $rows = $pdo->query("SELECT id, action, created_at, meta FROM audits ORDER BY id DESC LIMIT 100")->fetchAll(\PDO::FETCH_ASSOC);
+        Response::json(['notifications' => $rows]);
+    }
+
+    public static function affiliateConversionCsv(): void
+    {
+        self::requireAdmin();
+        $pdo = Database::pdo();
+        $sql = "SELECT referrer_code, COUNT(*) AS total_orders, SUM(CASE WHEN status='APROVADA' THEN 1 ELSE 0 END) as approved_orders, COALESCE(SUM(amount),0) as commission_total FROM affiliate_commissions GROUP BY referrer_code ORDER BY commission_total DESC";
+        $rows = $pdo->query($sql)->fetchAll(\PDO::FETCH_ASSOC);
+
+        header('Content-Type: text/csv; charset=utf-8');
+        header('Content-Disposition: attachment; filename=affiliate-conversion.csv');
+        $out = fopen('php://output', 'w');
+        fputcsv($out, ['referrer_code', 'total_orders', 'approved_orders', 'commission_total']);
+        foreach ($rows as $r) fputcsv($out, [$r['referrer_code'], $r['total_orders'], $r['approved_orders'], $r['commission_total']]);
+        fclose($out);
+    }
+
+    public static function slaPanel(): void
+    {
+        self::requireAdmin();
+        $pdo = Database::pdo();
+        $metrics = [
+            'orders_pending_payment' => (int) $pdo->query("SELECT COUNT(*) FROM orders WHERE estado='PENDENTE_PAGAMENTO'")->fetchColumn(),
+            'orders_in_execution' => (int) $pdo->query("SELECT COUNT(*) FROM orders WHERE estado='EM_EXECUCAO'")->fetchColumn(),
+            'services_open' => (int) $pdo->query("SELECT COUNT(*) FROM service_requests WHERE status IN ('NOVO','EM_ANALISE')")->fetchColumn(),
+            'chat_open_sessions' => (int) $pdo->query("SELECT COUNT(*) FROM support_chat_sessions WHERE status IN ('open','assigned','waiting_client')")->fetchColumn(),
+        ];
+        Response::json(['sla' => $metrics]);
+    }
+
+    public static function affiliateFraudPanel(): void
+    {
+        self::requireAdmin();
+        $pdo = Database::pdo();
+
+        $signals = [
+            'self_referral_attempts' => 0,
+            'suspicious_click_bursts' => [],
+            'high_conversion_codes' => [],
+            'auto_block_recommendations' => [],
+        ];
+
+        try {
+            $signals['self_referral_attempts'] = (int) $pdo->query("SELECT COUNT(*) FROM audits WHERE action='affiliate:fraud:self_referral'")->fetchColumn();
+        } catch (\Throwable $e) {}
+
+        try {
+            $sql = "SELECT JSON_UNQUOTE(JSON_EXTRACT(meta, '$.code')) AS code, COUNT(*) AS clicks
+                    FROM audits
+                    WHERE action='affiliate:click' AND created_at >= DATE_SUB(NOW(), INTERVAL 24 HOUR)
+                    GROUP BY code
+                    HAVING clicks >= 25
+                    ORDER BY clicks DESC
+                    LIMIT 20";
+            $signals['suspicious_click_bursts'] = $pdo->query($sql)->fetchAll(\PDO::FETCH_ASSOC);
+        } catch (\Throwable $e) {}
+
+        try {
+            $sql = "SELECT referrer_code, COUNT(*) AS approved_orders, COALESCE(SUM(amount),0) AS commission
+                    FROM affiliate_commissions
+                    WHERE status='APROVADA'
+                    GROUP BY referrer_code
+                    HAVING approved_orders >= 5
+                    ORDER BY approved_orders DESC
+                    LIMIT 20";
+            $signals['high_conversion_codes'] = $pdo->query($sql)->fetchAll(\PDO::FETCH_ASSOC);
+        } catch (\Throwable $e) {}
+
+        foreach (($signals['suspicious_click_bursts'] ?? []) as $row) {
+            if ((int)($row['clicks'] ?? 0) >= 80) {
+                $signals['auto_block_recommendations'][] = [
+                    'code' => $row['code'] ?? null,
+                    'reason' => 'Clique anómalo em 24h',
+                    'severity' => 'high',
+                ];
+            }
+        }
+
+        Response::json(['fraud' => $signals]);
+    }
+
+
+
+    public static function affiliateCampaigns(): void
+    {
+        self::requireAdmin();
+        $campaigns = self::readJsonStorage('affiliate-campaigns.json', [
+            [
+                'id' => 'camp_boasvindas',
+                'name' => 'Boas-vindas',
+                'channel' => 'all',
+                'offer' => 'Bónus 10% primeiro pedido',
+                'status' => 'active',
+                'commission_bonus_percent' => 0,
+            ],
+        ]);
+        Response::json(['campaigns' => $campaigns]);
+    }
+
+    public static function saveAffiliateCampaign(): void
+    {
+        $admin = self::requireAdmin();
+        $raw = file_get_contents('php://input') ?: '';
+        $data = json_decode($raw, true);
+        if (!is_array($data)) $data = $_POST;
+
+        $name = trim((string)($data['name'] ?? ''));
+        $offer = trim((string)($data['offer'] ?? ''));
+        if ($name === '' || $offer === '') {
+            Response::json(['message' => 'name e offer são obrigatórios'], 422);
+            return;
+        }
+
+        $campaigns = self::readJsonStorage('affiliate-campaigns.json', []);
+        $id = trim((string)($data['id'] ?? ''));
+        $record = [
+            'id' => $id !== '' ? $id : ('camp_' . date('YmdHis') . '_' . substr(bin2hex(random_bytes(3)), 0, 6)),
+            'name' => $name,
+            'channel' => trim((string)($data['channel'] ?? 'all')),
+            'offer' => $offer,
+            'status' => trim((string)($data['status'] ?? 'active')),
+            'commission_bonus_percent' => max(0, min(100, (float)($data['commission_bonus_percent'] ?? 0))),
+            'updated_at' => date('c'),
+        ];
+
+        $updated = false;
+        foreach ($campaigns as &$c) {
+            if (($c['id'] ?? '') === $record['id']) {
+                $c = $record;
+                $updated = true;
+                break;
+            }
+        }
+        unset($c);
+        if (!$updated) $campaigns[] = $record;
+
+        self::writeJsonStorage('affiliate-campaigns.json', $campaigns);
+        AuditHelper::log((int)$admin['id'], 'affiliate:campaign:save', ['campaign_id' => $record['id'], 'name' => $record['name']]);
+        Response::json(['message' => 'Campanha guardada', 'campaign' => $record]);
+    }
+
+    public static function affiliateMaterials(): void
+    {
+        self::requireAdmin();
+        $materials = self::readJsonStorage('affiliate-materials.json', [
+            ['id' => 'mat_default_banner', 'title' => 'Banner padrão', 'type' => 'banner', 'url' => '/assets/checklist-tcc.txt', 'status' => 'active'],
+        ]);
+        Response::json(['materials' => $materials]);
+    }
+
+    public static function saveAffiliateMaterial(): void
+    {
+        $admin = self::requireAdmin();
+        $raw = file_get_contents('php://input') ?: '';
+        $data = json_decode($raw, true);
+        if (!is_array($data)) $data = $_POST;
+
+        $title = trim((string)($data['title'] ?? ''));
+        $url = trim((string)($data['url'] ?? ''));
+        if ($title === '' || $url === '') {
+            Response::json(['message' => 'title e url são obrigatórios'], 422);
+            return;
+        }
+
+        $materials = self::readJsonStorage('affiliate-materials.json', []);
+        $id = trim((string)($data['id'] ?? ''));
+        $record = [
+            'id' => $id !== '' ? $id : ('mat_' . date('YmdHis') . '_' . substr(bin2hex(random_bytes(3)), 0, 6)),
+            'title' => $title,
+            'type' => trim((string)($data['type'] ?? 'other')),
+            'url' => $url,
+            'status' => trim((string)($data['status'] ?? 'active')),
+            'updated_at' => date('c'),
+        ];
+
+        $updated = false;
+        foreach ($materials as &$m) {
+            if (($m['id'] ?? '') === $record['id']) {
+                $m = $record;
+                $updated = true;
+                break;
+            }
+        }
+        unset($m);
+        if (!$updated) $materials[] = $record;
+
+        self::writeJsonStorage('affiliate-materials.json', $materials);
+        AuditHelper::log((int)$admin['id'], 'affiliate:material:save', ['material_id' => $record['id'], 'title' => $record['title']]);
+        Response::json(['message' => 'Material guardado', 'material' => $record]);
+    }
+
+    public static function affiliateControl(): void
+    {
+        self::requireAdmin();
+        $pdo = Database::pdo();
+        $totals = [
+            'clicks_24h' => 0,
+            'new_commissions_24h' => 0,
+            'pending_payouts' => 0,
+        ];
+        try {
+            $totals['clicks_24h'] = (int)$pdo->query("SELECT COUNT(*) FROM audits WHERE action='affiliate:click' AND created_at >= DATE_SUB(NOW(), INTERVAL 24 HOUR)")->fetchColumn();
+            $totals['new_commissions_24h'] = (int)$pdo->query("SELECT COUNT(*) FROM affiliate_commissions WHERE created_at >= DATE_SUB(NOW(), INTERVAL 24 HOUR)")->fetchColumn();
+            $totals['pending_payouts'] = (int)$pdo->query("SELECT COUNT(*) FROM affiliate_payouts WHERE status IN ('SOLICITADO','APROVADO')")->fetchColumn();
+        } catch (\Throwable $e) {}
+
+        $settings = self::readJsonStorage('affiliate-settings.json', [
+            'base_commission_percent' => 18,
+            'volume_bonus_enabled' => true,
+            'special_campaign_bonus_enabled' => true,
+            'attribution_model' => 'last_click',
+            'conversion_window_days' => 30,
+        ]);
+
+        Response::json(['totals' => $totals, 'settings' => $settings]);
     }
 
     public static function audits(): void
