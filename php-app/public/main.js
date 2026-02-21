@@ -331,6 +331,9 @@ async function loadAffiliate() {
       <h4>Biblioteca de materiais</h4>
       <div class="list">${materials.map((m) => `<div class="list-item"><div><strong>${m.title}</strong><p class="muted">${m.type || 'material'}</p></div><a class="ghost" href="${m.url}" target="_blank" rel="noopener noreferrer">Abrir</a></div>`).join('') || '<p class="muted">Sem materiais</p>'}</div>
 
+      <h4>Configuração do programa</h4>
+      <div class="list"><div class="list-item"><div><strong>Comissão base</strong><p class="muted">${data.affiliate_settings?.base_commission_percent ?? 18}% · Modelo: ${data.affiliate_settings?.attribution_model || 'last_click'} · Janela: ${data.affiliate_settings?.conversion_window_days || 30} dias</p></div></div></div>
+
       <h4>Leaderboard de afiliados</h4>
       <div class="list">${leaderboard.map((l) => `<div class="list-item"><div>#${l.rank} · ${l.referrer_code}</div><span class="badge">${l.total} MZN</span></div>`).join('') || '<p class="muted">Sem ranking</p>'}</div>
 

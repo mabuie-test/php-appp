@@ -24,6 +24,18 @@
     <section class="card">
       <h1>Controlo operacional</h1>
       <div id="af-control" class="list"></div>
+      <form id="af-settings-form" class="stacked" style="margin-top:10px">
+        <div class="inline-group">
+          <label>Comissão base % <input id="af-base-commission" type="number" min="0" max="100" /></label>
+          <label>Janela conversão (dias) <input id="af-window-days" type="number" min="1" max="90" /></label>
+        </div>
+        <div class="inline-group">
+          <label><input id="af-volume-bonus" type="checkbox" /> Bónus de volume</label>
+          <label><input id="af-special-bonus" type="checkbox" /> Bónus campanhas especiais</label>
+          <label>Modelo <select id="af-attribution-model"><option value="last_click">last_click</option><option value="first_click">first_click</option></select></label>
+        </div>
+        <button class="ghost" type="submit">Guardar configurações</button>
+      </form>
 
       <h2 style="margin-top:1rem">Comissões</h2>
       <div id="admin-commissions" class="list"></div>
@@ -64,6 +76,8 @@
     const apiBase = '/api';
     const token = localStorage.getItem('token') || '';
     const headers = token ? { Authorization: `Bearer ${token}` } : {};
+    let currentCampaigns = [];
+    let currentMaterials = [];
 
     function toast(t){ alert(t); }
 
@@ -80,6 +94,27 @@
         <div class="list-item"><div><strong>Payouts pendentes</strong><p class="muted">${t.pending_payouts ?? 0}</p></div></div>
         <div class="list-item"><div><strong>Modelo atribuição</strong><p class="muted">${s.attribution_model || 'last_click'} · janela ${s.conversion_window_days || 30} dias</p></div></div>
       `;
+      document.getElementById('af-base-commission').value = s.base_commission_percent ?? 18;
+      document.getElementById('af-window-days').value = s.conversion_window_days ?? 30;
+      document.getElementById('af-volume-bonus').checked = !!s.volume_bonus_enabled;
+      document.getElementById('af-special-bonus').checked = !!s.special_campaign_bonus_enabled;
+      document.getElementById('af-attribution-model').value = s.attribution_model || 'last_click';
+    }
+
+    async function saveSettings(e){
+      e.preventDefault();
+      const body = {
+        base_commission_percent: Number(document.getElementById('af-base-commission').value || 18),
+        conversion_window_days: Number(document.getElementById('af-window-days').value || 30),
+        volume_bonus_enabled: document.getElementById('af-volume-bonus').checked ? 1 : 0,
+        special_campaign_bonus_enabled: document.getElementById('af-special-bonus').checked ? 1 : 0,
+        attribution_model: document.getElementById('af-attribution-model').value,
+      };
+      const res = await fetch(`${apiBase}/admin/affiliates/settings/save`, { method: 'POST', headers: { ...headers, 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+      const data = await res.json();
+      if (!res.ok) return toast(data.message || 'Erro');
+      toast('Configurações guardadas');
+      loadControl();
     }
 
     async function loadCommissions() {
@@ -103,7 +138,8 @@
       const res = await fetch(`${apiBase}/admin/affiliates/campaigns`, { headers });
       const data = await res.json();
       if (!res.ok) { box.innerHTML = `<p class="muted">${data.message || 'Erro'}</p>`; return; }
-      box.innerHTML = (data.campaigns || []).map((c) => `<div class="list-item"><div><strong>${c.name}</strong><p class="muted">${c.offer} · ${c.channel}</p></div><span class="badge">+${c.commission_bonus_percent || 0}%</span></div>`).join('') || '<p class="muted">Sem campanhas</p>';
+      currentCampaigns = data.campaigns || [];
+      box.innerHTML = currentCampaigns.map((c) => `<div class="list-item"><div><strong>${c.name}</strong><p class="muted">${c.offer} · ${c.channel}</p></div><div class="inline-group"><span class="badge">+${c.commission_bonus_percent || 0}%</span><button class="ghost" onclick="editCampaign('${c.id}')">Editar</button><button class="ghost" onclick="deleteCampaign('${c.id}')">Remover</button></div></div>`).join('') || '<p class="muted">Sem campanhas</p>';
     }
 
     async function loadMaterials() {
@@ -111,12 +147,14 @@
       const res = await fetch(`${apiBase}/admin/affiliates/materials`, { headers });
       const data = await res.json();
       if (!res.ok) { box.innerHTML = `<p class="muted">${data.message || 'Erro'}</p>`; return; }
-      box.innerHTML = (data.materials || []).map((m) => `<div class="list-item"><div><strong>${m.title}</strong><p class="muted">${m.type}</p></div><a class="ghost" href="${m.url}" target="_blank">Abrir</a></div>`).join('') || '<p class="muted">Sem materiais</p>';
+      currentMaterials = data.materials || [];
+      box.innerHTML = currentMaterials.map((m) => `<div class="list-item"><div><strong>${m.title}</strong><p class="muted">${m.type}</p></div><div class="inline-group"><a class="ghost" href="${m.url}" target="_blank">Abrir</a><button class="ghost" onclick="editMaterial('${m.id}')">Editar</button><button class="ghost" onclick="deleteMaterial('${m.id}')">Remover</button></div></div>`).join('') || '<p class="muted">Sem materiais</p>';
     }
 
     async function saveCampaign(e) {
       e.preventDefault();
       const body = {
+        id: document.getElementById('af-campaign-form').dataset.editId || '',
         name: document.getElementById('af-campaign-name').value,
         offer: document.getElementById('af-campaign-offer').value,
         channel: document.getElementById('af-campaign-channel').value,
@@ -127,12 +165,14 @@
       if (!res.ok) return toast(data.message || 'Erro');
       toast('Campanha guardada');
       e.target.reset();
+      e.target.dataset.editId = '';
       loadCampaigns();
     }
 
     async function saveMaterial(e) {
       e.preventDefault();
       const body = {
+        id: document.getElementById('af-material-form').dataset.editId || '',
         title: document.getElementById('af-material-title').value,
         url: document.getElementById('af-material-url').value,
         type: document.getElementById('af-material-type').value,
@@ -142,9 +182,48 @@
       if (!res.ok) return toast(data.message || 'Erro');
       toast('Material guardado');
       e.target.reset();
+      e.target.dataset.editId = '';
       loadMaterials();
     }
 
+    window.editCampaign = function(id){
+      const c = currentCampaigns.find(x => x.id === id); if (!c) return;
+      document.getElementById('af-campaign-name').value = c.name || '';
+      document.getElementById('af-campaign-offer').value = c.offer || '';
+      document.getElementById('af-campaign-channel').value = c.channel || '';
+      document.getElementById('af-campaign-bonus').value = c.commission_bonus_percent || 0;
+      document.getElementById('af-campaign-form').dataset.editId = c.id;
+      toast('Editar campanha: após ajustar, clique Guardar campanha.');
+    }
+
+    window.deleteCampaign = async function(id){
+      if (!confirm('Remover campanha?')) return;
+      const res = await fetch(`${apiBase}/admin/affiliates/campaigns/delete`, { method: 'POST', headers: { ...headers, 'Content-Type':'application/json' }, body: JSON.stringify({ id }) });
+      const data = await res.json();
+      if (!res.ok) return toast(data.message || 'Erro');
+      toast('Campanha removida');
+      loadCampaigns();
+    }
+
+    window.editMaterial = function(id){
+      const m = currentMaterials.find(x => x.id === id); if (!m) return;
+      document.getElementById('af-material-title').value = m.title || '';
+      document.getElementById('af-material-url').value = m.url || '';
+      document.getElementById('af-material-type').value = m.type || '';
+      document.getElementById('af-material-form').dataset.editId = m.id;
+      toast('Editar material: após ajustar, clique Guardar material.');
+    }
+
+    window.deleteMaterial = async function(id){
+      if (!confirm('Remover material?')) return;
+      const res = await fetch(`${apiBase}/admin/affiliates/materials/delete`, { method: 'POST', headers: { ...headers, 'Content-Type':'application/json' }, body: JSON.stringify({ id }) });
+      const data = await res.json();
+      if (!res.ok) return toast(data.message || 'Erro');
+      toast('Material removido');
+      loadMaterials();
+    }
+
+    document.getElementById('af-settings-form')?.addEventListener('submit', saveSettings);
     document.getElementById('af-campaign-form')?.addEventListener('submit', saveCampaign);
     document.getElementById('af-material-form')?.addEventListener('submit', saveMaterial);
     document.getElementById('logout')?.addEventListener('click', () => { localStorage.removeItem('token'); localStorage.removeItem('role'); location.href='/login.html'; });

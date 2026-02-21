@@ -212,6 +212,19 @@ if ($uri === '/api/admin/affiliates/control' && $method === 'GET') {
     return;
 }
 
+if ($uri === '/api/admin/affiliates/campaigns/delete' && $method === 'POST') {
+    AdminController::deleteAffiliateCampaign();
+    return;
+}
+if ($uri === '/api/admin/affiliates/materials/delete' && $method === 'POST') {
+    AdminController::deleteAffiliateMaterial();
+    return;
+}
+if ($uri === '/api/admin/affiliates/settings/save' && $method === 'POST') {
+    AdminController::saveAffiliateSettings();
+    return;
+}
+
 if ($uri === '/api/admin/marketing/leads' && $method === 'GET') {
     AdminController::marketingLeads();
     return;

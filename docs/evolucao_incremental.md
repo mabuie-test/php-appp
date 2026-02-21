@@ -69,6 +69,9 @@
 - `GET /api/admin/affiliates/materials`
 - `POST /api/admin/affiliates/materials/save`
 - `GET /api/admin/affiliates/control`
+- `POST /api/admin/affiliates/settings/save`
+- `POST /api/admin/affiliates/materials/delete`
+- `POST /api/admin/affiliates/campaigns/delete`
 - `POST /api/admin/users/anonymize`
 - `GET /api/admin/marketing/recipients`
 - `POST /api/admin/marketing/campaign/send`
@@ -125,3 +128,5 @@
 - Campanhas promocionais com envio de teste, deduplicação de destinatários e histórico no painel admin.
 
 - Painel de afiliados profissional (admin e cliente) com campanhas, biblioteca de materiais, leaderboard e controlo operacional.
+
+- Admin passou a gerir cada elemento de afiliados (edição/remoção de campanhas e materiais + configuração global de comissões/atribuição).

@@ -1076,6 +1076,83 @@ public static function payouts(): void
         Response::json(['totals' => $totals, 'settings' => $settings]);
     }
 
+
+
+    public static function deleteAffiliateCampaign(): void
+    {
+        $admin = self::requireAdmin();
+        $raw = file_get_contents('php://input') ?: '';
+        $data = json_decode($raw, true);
+        if (!is_array($data)) $data = $_POST;
+        $id = trim((string)($data['id'] ?? ''));
+        if ($id === '') {
+            Response::json(['message' => 'id é obrigatório'], 422);
+            return;
+        }
+        $campaigns = self::readJsonStorage('affiliate-campaigns.json', []);
+        $before = count($campaigns);
+        $campaigns = array_values(array_filter($campaigns, fn($c) => (($c['id'] ?? '') !== $id)));
+        self::writeJsonStorage('affiliate-campaigns.json', $campaigns);
+        AuditHelper::log((int)$admin['id'], 'affiliate:campaign:delete', ['campaign_id' => $id]);
+        Response::json(['message' => 'Campanha removida', 'removed' => $before - count($campaigns)]);
+    }
+
+    public static function deleteAffiliateMaterial(): void
+    {
+        $admin = self::requireAdmin();
+        $raw = file_get_contents('php://input') ?: '';
+        $data = json_decode($raw, true);
+        if (!is_array($data)) $data = $_POST;
+        $id = trim((string)($data['id'] ?? ''));
+        if ($id === '') {
+            Response::json(['message' => 'id é obrigatório'], 422);
+            return;
+        }
+        $materials = self::readJsonStorage('affiliate-materials.json', []);
+        $before = count($materials);
+        $materials = array_values(array_filter($materials, fn($m) => (($m['id'] ?? '') !== $id)));
+        self::writeJsonStorage('affiliate-materials.json', $materials);
+        AuditHelper::log((int)$admin['id'], 'affiliate:material:delete', ['material_id' => $id]);
+        Response::json(['message' => 'Material removido', 'removed' => $before - count($materials)]);
+    }
+
+    public static function saveAffiliateSettings(): void
+    {
+        $admin = self::requireAdmin();
+        $raw = file_get_contents('php://input') ?: '';
+        $data = json_decode($raw, true);
+        if (!is_array($data)) $data = $_POST;
+
+        $settings = self::readJsonStorage('affiliate-settings.json', [
+            'base_commission_percent' => 18,
+            'volume_bonus_enabled' => true,
+            'special_campaign_bonus_enabled' => true,
+            'attribution_model' => 'last_click',
+            'conversion_window_days' => 30,
+        ]);
+
+        if (isset($data['base_commission_percent'])) {
+            $settings['base_commission_percent'] = max(0, min(100, (float)$data['base_commission_percent']));
+        }
+        if (isset($data['volume_bonus_enabled'])) {
+            $settings['volume_bonus_enabled'] = (string)$data['volume_bonus_enabled'] === '1' || $data['volume_bonus_enabled'] === true;
+        }
+        if (isset($data['special_campaign_bonus_enabled'])) {
+            $settings['special_campaign_bonus_enabled'] = (string)$data['special_campaign_bonus_enabled'] === '1' || $data['special_campaign_bonus_enabled'] === true;
+        }
+        if (isset($data['attribution_model']) && in_array($data['attribution_model'], ['first_click','last_click'], true)) {
+            $settings['attribution_model'] = $data['attribution_model'];
+        }
+        if (isset($data['conversion_window_days'])) {
+            $settings['conversion_window_days'] = max(1, min(90, (int)$data['conversion_window_days']));
+        }
+        $settings['updated_at'] = date('c');
+
+        self::writeJsonStorage('affiliate-settings.json', $settings);
+        AuditHelper::log((int)$admin['id'], 'affiliate:settings:save', $settings);
+        Response::json(['message' => 'Configurações guardadas', 'settings' => $settings]);
+    }
+
     public static function audits(): void
     {
         self::requireAdmin();

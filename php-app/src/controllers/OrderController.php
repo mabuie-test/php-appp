@@ -290,6 +290,13 @@ class OrderController
                 'next_payout_estimate' => $nextPayoutForecast,
                 'model' => 'heuristic_v1',
             ],
+            'affiliate_settings' => self::readJsonStorage('affiliate-settings.json', [
+                'base_commission_percent' => 18,
+                'volume_bonus_enabled' => true,
+                'special_campaign_bonus_enabled' => true,
+                'attribution_model' => 'last_click',
+                'conversion_window_days' => 30,
+            ]),
         ]);
     }
 
