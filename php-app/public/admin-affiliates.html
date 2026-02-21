@@ -52,6 +52,7 @@
         <div class="inline-group">
           <input id="af-campaign-channel" placeholder="Canal (whatsapp, instagram...)" />
           <input id="af-campaign-bonus" type="number" min="0" max="100" placeholder="Bónus comissão %" />
+          <select id="af-campaign-status"><option value="active">Ativa</option><option value="paused">Pausada</option></select>
         </div>
         <button class="primary" type="submit">Guardar campanha</button>
       </form>
@@ -63,6 +64,7 @@
         <input id="af-material-url" placeholder="URL do material" required />
         <div class="inline-group">
           <input id="af-material-type" placeholder="Tipo (banner, copy, video)" />
+          <select id="af-material-status"><option value="active">Ativo</option><option value="paused">Pausado</option></select>
           <button class="ghost" type="submit">Guardar material</button>
         </div>
       </form>
@@ -139,7 +141,7 @@
       const data = await res.json();
       if (!res.ok) { box.innerHTML = `<p class="muted">${data.message || 'Erro'}</p>`; return; }
       currentCampaigns = data.campaigns || [];
-      box.innerHTML = currentCampaigns.map((c) => `<div class="list-item"><div><strong>${c.name}</strong><p class="muted">${c.offer} · ${c.channel}</p></div><div class="inline-group"><span class="badge">+${c.commission_bonus_percent || 0}%</span><button class="ghost" onclick="editCampaign('${c.id}')">Editar</button><button class="ghost" onclick="deleteCampaign('${c.id}')">Remover</button></div></div>`).join('') || '<p class="muted">Sem campanhas</p>';
+      box.innerHTML = currentCampaigns.map((c) => `<div class="list-item"><div><strong>${c.name}</strong><p class="muted">${c.offer} · ${c.channel}</p></div><div class="inline-group"><span class="badge">${c.status || 'active'} · +${c.commission_bonus_percent || 0}%</span><button class="ghost" onclick="toggleCampaignStatus('${c.id}', '${(c.status || 'active') === 'active' ? 'paused' : 'active'}')">${(c.status || 'active') === 'active' ? 'Pausar' : 'Ativar'}</button><button class="ghost" onclick="editCampaign('${c.id}')">Editar</button><button class="ghost" onclick="deleteCampaign('${c.id}')">Remover</button></div></div>`).join('') || '<p class="muted">Sem campanhas</p>';
     }
 
     async function loadMaterials() {
@@ -148,7 +150,7 @@
       const data = await res.json();
       if (!res.ok) { box.innerHTML = `<p class="muted">${data.message || 'Erro'}</p>`; return; }
       currentMaterials = data.materials || [];
-      box.innerHTML = currentMaterials.map((m) => `<div class="list-item"><div><strong>${m.title}</strong><p class="muted">${m.type}</p></div><div class="inline-group"><a class="ghost" href="${m.url}" target="_blank">Abrir</a><button class="ghost" onclick="editMaterial('${m.id}')">Editar</button><button class="ghost" onclick="deleteMaterial('${m.id}')">Remover</button></div></div>`).join('') || '<p class="muted">Sem materiais</p>';
+      box.innerHTML = currentMaterials.map((m) => `<div class="list-item"><div><strong>${m.title}</strong><p class="muted">${m.type}</p></div><div class="inline-group"><span class="badge">${m.status || 'active'}</span><a class="ghost" href="${m.url}" target="_blank">Abrir</a><button class="ghost" onclick="toggleMaterialStatus('${m.id}', '${(m.status || 'active') === 'active' ? 'paused' : 'active'}')">${(m.status || 'active') === 'active' ? 'Pausar' : 'Ativar'}</button><button class="ghost" onclick="editMaterial('${m.id}')">Editar</button><button class="ghost" onclick="deleteMaterial('${m.id}')">Remover</button></div></div>`).join('') || '<p class="muted">Sem materiais</p>';
     }
 
     async function saveCampaign(e) {
@@ -159,6 +161,7 @@
         offer: document.getElementById('af-campaign-offer').value,
         channel: document.getElementById('af-campaign-channel').value,
         commission_bonus_percent: Number(document.getElementById('af-campaign-bonus').value || 0),
+        status: document.getElementById('af-campaign-status').value,
       };
       const res = await fetch(`${apiBase}/admin/affiliates/campaigns/save`, { method: 'POST', headers: { ...headers, 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
       const data = await res.json();
@@ -176,6 +179,7 @@
         title: document.getElementById('af-material-title').value,
         url: document.getElementById('af-material-url').value,
         type: document.getElementById('af-material-type').value,
+        status: document.getElementById('af-material-status').value,
       };
       const res = await fetch(`${apiBase}/admin/affiliates/materials/save`, { method: 'POST', headers: { ...headers, 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
       const data = await res.json();
@@ -186,12 +190,34 @@
       loadMaterials();
     }
 
+
+    window.toggleCampaignStatus = async function(id, status){
+      const c = currentCampaigns.find(x => x.id === id); if (!c) return;
+      const body = { ...c, id, status };
+      const res = await fetch(`${apiBase}/admin/affiliates/campaigns/save`, { method: 'POST', headers: { ...headers, 'Content-Type':'application/json' }, body: JSON.stringify(body) });
+      const data = await res.json();
+      if (!res.ok) return toast(data.message || 'Erro');
+      toast('Estado da campanha atualizado');
+      loadCampaigns();
+    }
+
+    window.toggleMaterialStatus = async function(id, status){
+      const m = currentMaterials.find(x => x.id === id); if (!m) return;
+      const body = { ...m, id, status };
+      const res = await fetch(`${apiBase}/admin/affiliates/materials/save`, { method: 'POST', headers: { ...headers, 'Content-Type':'application/json' }, body: JSON.stringify(body) });
+      const data = await res.json();
+      if (!res.ok) return toast(data.message || 'Erro');
+      toast('Estado do material atualizado');
+      loadMaterials();
+    }
+
     window.editCampaign = function(id){
       const c = currentCampaigns.find(x => x.id === id); if (!c) return;
       document.getElementById('af-campaign-name').value = c.name || '';
       document.getElementById('af-campaign-offer').value = c.offer || '';
       document.getElementById('af-campaign-channel').value = c.channel || '';
       document.getElementById('af-campaign-bonus').value = c.commission_bonus_percent || 0;
+      document.getElementById('af-campaign-status').value = c.status || 'active';
       document.getElementById('af-campaign-form').dataset.editId = c.id;
       toast('Editar campanha: após ajustar, clique Guardar campanha.');
     }
@@ -210,6 +236,7 @@
       document.getElementById('af-material-title').value = m.title || '';
       document.getElementById('af-material-url').value = m.url || '';
       document.getElementById('af-material-type').value = m.type || '';
+      document.getElementById('af-material-status').value = m.status || 'active';
       document.getElementById('af-material-form').dataset.editId = m.id;
       toast('Editar material: após ajustar, clique Guardar material.');
     }
